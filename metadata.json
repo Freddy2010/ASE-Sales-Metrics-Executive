@@ -1,0 +1,6 @@
+{
+  "name": "NetSuite Executive Financial Dashboard",
+  "description": "An executive-level financial management dashboard powered by NetSuite SuiteTalk API integration, showing cash forecasting, sales projections, P&L, and balance sheet reporting.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
