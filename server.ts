@@ -13,11 +13,25 @@ const PORT = 3000;
 
 app.use(express.json());
 
+// Helper to strip any copy-paste artifact quotes or spaces from env vars (common in Railway/Vercel)
+function cleanEnvVar(val: string | undefined): string {
+  if (!val) return "";
+  let clean = val.trim();
+  // Strip leading and trailing double or single quotes if they exist
+  if (clean.startsWith('"') && clean.endsWith('"')) {
+    clean = clean.slice(1, -1);
+  }
+  if (clean.startsWith("'") && clean.endsWith("'")) {
+    clean = clean.slice(1, -1);
+  }
+  return clean.trim();
+}
+
 // Initialize Gemini API client safely (lazy loaded/guarded)
 let aiClient: GoogleGenAI | null = null;
 function getAiClient(): GoogleGenAI | null {
   if (!aiClient) {
-    const key = process.env.GEMINI_API_KEY;
+    const key = cleanEnvVar(process.env.GEMINI_API_KEY);
     if (key && key !== "MY_GEMINI_API_KEY") {
       aiClient = new GoogleGenAI({
         apiKey: key,
@@ -35,11 +49,11 @@ function getAiClient(): GoogleGenAI | null {
 // NetSuite credentials status
 function getNetsuiteConfig() {
   return {
-    accountId: process.env.NETSUITE_ACCOUNT_ID || "",
-    consumerKey: process.env.NETSUITE_CONSUMER_KEY || "",
-    consumerSecret: process.env.NETSUITE_CONSUMER_SECRET || "",
-    tokenId: process.env.NETSUITE_TOKEN_ID || "",
-    tokenSecret: process.env.NETSUITE_TOKEN_SECRET || "",
+    accountId: cleanEnvVar(process.env.NETSUITE_ACCOUNT_ID),
+    consumerKey: cleanEnvVar(process.env.NETSUITE_CONSUMER_KEY),
+    consumerSecret: cleanEnvVar(process.env.NETSUITE_CONSUMER_SECRET),
+    tokenId: cleanEnvVar(process.env.NETSUITE_TOKEN_ID),
+    tokenSecret: cleanEnvVar(process.env.NETSUITE_TOKEN_SECRET),
   };
 }
 

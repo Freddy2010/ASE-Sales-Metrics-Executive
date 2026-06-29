@@ -496,6 +496,19 @@ export default function App() {
           </div>
         )}
 
+        {dashboardData?.errorNotice && (
+          <div className="p-4 bg-amber-50 border border-amber-200 text-amber-800 text-xs rounded-xl flex items-start gap-3 shadow-xs animate-fadeIn mb-4">
+            <span className="p-1 rounded bg-amber-100 border border-amber-200 shrink-0">⚠️</span>
+            <div className="space-y-1">
+              <p className="font-bold text-slate-900">NetSuite Live Query Fallback Active</p>
+              <p className="text-slate-700 leading-relaxed font-mono text-[11px] bg-white/60 p-2 rounded border border-amber-200/40 mt-1">{dashboardData.errorNotice}</p>
+              <p className="text-[10px] text-slate-500 pt-1.5">
+                The application connected successfully but failed to execute financial queries. Verify that the Role assigned to your NetSuite Access Token has full permissions for the <code className="font-mono bg-slate-100 px-1 py-0.5 rounded">transaction</code>, <code className="font-mono bg-slate-100 px-1 py-0.5 rounded">account</code>, and <code className="font-mono bg-slate-100 px-1 py-0.5 rounded">companyinformation</code> tables under NetSuite Setup &gt; Users/Roles.
+              </p>
+            </div>
+          </div>
+        )}
+
         {/* Global Loading state */}
         {loading ? (
           <div className="flex flex-col items-center justify-center py-24 space-y-4">
