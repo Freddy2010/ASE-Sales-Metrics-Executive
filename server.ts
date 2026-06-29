@@ -151,45 +151,90 @@ app.get("/api/netsuite/status", async (req, res) => {
 
   if (configured) {
     try {
-      // Attempt a lightweight test fetch (e.g. select first company account from NetSuite SuiteQL)
       const domain = getNetsuiteDomain(config.accountId);
       const url = `https://${domain}/services/rest/query/v1/suiteql?limit=1`;
-      const authHeader = buildNetsuiteOauthHeader("POST", url);
 
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 6000); // 6s timeout
+      const tryQuery = async (queryStr: string): Promise<{ ok: boolean, status: number, body: string, data?: any }> => {
+        const authHeader = buildNetsuiteOauthHeader("POST", url);
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 6000); // 6s timeout
+        try {
+          const response = await fetch(url, {
+            method: "POST",
+            headers: {
+              "Authorization": authHeader,
+              "Content-Type": "application/json",
+              "prefer": "transient",
+            },
+            body: JSON.stringify({ q: queryStr }),
+            signal: controller.signal,
+          });
+          const text = await response.text();
+          let parsed = null;
+          try { parsed = JSON.parse(text); } catch (e) {}
+          return { ok: response.ok, status: response.status, body: text, data: parsed };
+        } catch (err: any) {
+          return { ok: false, status: 500, body: err.message || "Timeout/Network error" };
+        } finally {
+          clearTimeout(timeoutId);
+        }
+      };
 
-      const response = await fetch(url, {
-        method: "POST",
-        headers: {
-          "Authorization": authHeader,
-          "Content-Type": "application/json",
-          "prefer": "transient",
-        },
-        body: JSON.stringify({
-          q: "SELECT companyname FROM companyinformation"
-        }),
-        signal: controller.signal,
-      });
+      // 1. Try companyInformation (camelCase)
+      let resQuery = await tryQuery("SELECT companyname FROM companyInformation");
+      
+      // 2. Try CompanyInformation (PascalCase) if camelCase failed
+      if (!resQuery.ok && resQuery.status !== 401 && resQuery.status !== 403) {
+        resQuery = await tryQuery("SELECT companyname FROM CompanyInformation");
+      }
 
-      clearTimeout(timeoutId);
+      // 3. Try companyinformation (lowercase) if others failed
+      if (!resQuery.ok && resQuery.status !== 401 && resQuery.status !== 403) {
+        resQuery = await tryQuery("SELECT companyname FROM companyinformation");
+      }
 
-      if (response.ok) {
-        const data: any = await response.json();
+      // 4. Try transaction if all company queries failed but it's not a credential rejection
+      if (!resQuery.ok && resQuery.status !== 401 && resQuery.status !== 403) {
+        resQuery = await tryQuery("SELECT id FROM transaction");
+      }
+
+      // 5. Try account if transaction failed
+      if (!resQuery.ok && resQuery.status !== 401 && resQuery.status !== 403) {
+        resQuery = await tryQuery("SELECT id FROM account");
+      }
+
+      // Now evaluate results
+      if (resQuery.ok) {
         connectionSuccess = true;
         connectionMessage = "Successfully authenticated and connected to NetSuite Enterprise ERP.";
+        
+        let foundCompanyName = "";
+        const data = resQuery.data;
         if (data && data.items && data.items[0]) {
+          foundCompanyName = data.items[0].companyname || "";
+        }
+        
+        accountInfo = {
+          companyName: foundCompanyName || "NetSuite Connected Account",
+          accountId: config.accountId,
+        };
+      } else {
+        // If we got a 400 Bad Request with a SQL query error, it means authentication succeeded!
+        // But the schema/tables we queried did not match, or we don't have permission for those tables.
+        const isSqlError = resQuery.status === 400 || resQuery.body.includes("Invalid search query") || resQuery.body.includes("Search error occurred") || resQuery.body.includes("was not found") || resQuery.body.includes("Unknown identifier");
+        const isAuthError = resQuery.status === 401 || resQuery.status === 403 || resQuery.body.includes("Invalid login attempt") || resQuery.body.includes("invalid_request") || resQuery.body.includes("invalid_token");
+
+        if (isSqlError && !isAuthError) {
+          connectionSuccess = true;
+          connectionMessage = "Successfully authenticated with NetSuite! Connected to Live ERP (Note: Some queries returned SQL/schema errors; we are falling back to high-fidelity simulated metrics for missing views).";
           accountInfo = {
-            companyName: data.items[0].companyname || "NetSuite Connected Account",
+            companyName: `NetSuite Account ${config.accountId}`,
             accountId: config.accountId,
           };
         } else {
-          accountInfo = { companyName: "Configured Account", accountId: config.accountId };
+          connectionSuccess = false;
+          connectionMessage = `NetSuite rejected credentials. Status: ${resQuery.status} - ${resQuery.body.substring(0, 200)}`;
         }
-      } else {
-        const errorText = await response.text();
-        connectionSuccess = false;
-        connectionMessage = `NetSuite rejected credentials. Status: ${response.status} - ${errorText.substring(0, 200)}`;
       }
     } catch (err: any) {
       connectionSuccess = false;
@@ -349,14 +394,28 @@ app.get("/api/netsuite/dashboard", async (req, res) => {
 
       const liveData: any = {};
       
-      // 1. Fetch Company Name
+      // 1. Fetch Company Name (safely try both casing variations)
       try {
-        const companyItems = await executeQL("SELECT companyname FROM companyinformation");
+        const companyItems = await executeQL("SELECT companyname FROM companyInformation");
         if (companyItems && companyItems[0]) {
           liveData.companyName = companyItems[0].companyname;
         }
       } catch (err) {
-        console.warn("Failed to fetch company name from NetSuite", err);
+        try {
+          const companyItemsAlt = await executeQL("SELECT companyname FROM CompanyInformation");
+          if (companyItemsAlt && companyItemsAlt[0]) {
+            liveData.companyName = companyItemsAlt[0].companyname;
+          }
+        } catch (errAlt) {
+          try {
+            const companyItemsAlt2 = await executeQL("SELECT companyname FROM companyinformation");
+            if (companyItemsAlt2 && companyItemsAlt2[0]) {
+              liveData.companyName = companyItemsAlt2[0].companyname;
+            }
+          } catch (errAlt2) {
+            console.warn("Failed to fetch company name from NetSuite (all tables failed)", errAlt2);
+          }
+        }
       }
 
       // 2. Fetch Cash Balance (BANK)
@@ -369,9 +428,9 @@ app.get("/api/netsuite/dashboard", async (req, res) => {
         console.warn("Failed to fetch cash balance from NetSuite", err);
       }
 
-      // 3. Fetch AR Balance (Accounts Receivable)
+      // 3. Fetch AR Balance (Accounts Receivable) - avoiding 'isopen' field which is not standard SuiteQL
       try {
-        const arItems = await executeQL("SELECT SUM(amountremaining) as ar FROM transaction WHERE type = 'CustInvc' AND isopen = 'T'");
+        const arItems = await executeQL("SELECT SUM(amountremaining) as ar FROM transaction WHERE type = 'CustInvc' AND amountremaining > 0");
         if (arItems && arItems[0] && arItems[0].ar !== null) {
           liveData.arOutstanding = Math.abs(parseFloat(arItems[0].ar));
         }
@@ -379,9 +438,9 @@ app.get("/api/netsuite/dashboard", async (req, res) => {
         console.warn("Failed to fetch AR outstanding balance from NetSuite", err);
       }
 
-      // 4. Fetch AP Balance (Accounts Payable)
+      // 4. Fetch AP Balance (Accounts Payable) - avoiding 'isopen' field which is not standard SuiteQL
       try {
-        const apItems = await executeQL("SELECT SUM(amountremaining) as ap FROM transaction WHERE type = 'VendBill' AND isopen = 'T'");
+        const apItems = await executeQL("SELECT SUM(amountremaining) as ap FROM transaction WHERE type = 'VendBill' AND amountremaining > 0");
         if (apItems && apItems[0] && apItems[0].ap !== null) {
           liveData.apOutstanding = Math.abs(parseFloat(apItems[0].ap));
         }
@@ -389,32 +448,60 @@ app.get("/api/netsuite/dashboard", async (req, res) => {
         console.warn("Failed to fetch AP outstanding balance from NetSuite", err);
       }
 
-      // 5. Fetch YTD Sales/Revenue (Income Accounts)
+      // 5. Fetch YTD Sales/Revenue (Income Accounts) using standard joined query with schema resilience
       try {
-        const salesItems = await executeQL("SELECT -SUM(amount) as revenue FROM transactionline JOIN account ON transactionline.account = account.id WHERE account.accttype = 'INCOME' AND transactionline.trandate >= '2026-01-01'");
+        const salesItems = await executeQL("SELECT -SUM(transactionline.foreignamount) as revenue FROM transactionline JOIN account ON transactionline.account = account.id JOIN transaction ON transactionline.transaction = transaction.id WHERE account.accttype = 'INCOME' AND transaction.trandate >= '2026-01-01'");
         if (salesItems && salesItems[0] && salesItems[0].revenue !== null) {
           liveData.revenueYtd = Math.abs(parseFloat(salesItems[0].revenue));
         }
       } catch (err) {
-        // Fallback to simpler transaction search if account join is non-standard
         try {
-          const altItems = await executeQL("SELECT SUM(foreignamount) as totalSales FROM transaction WHERE type = 'SalesOrd' AND trandate >= '2026-01-01'");
-          if (altItems && altItems[0] && altItems[0].totalSales !== null) {
-            liveData.revenueYtd = Math.abs(parseFloat(altItems[0].totalSales));
+          const salesItemsAlt = await executeQL("SELECT -SUM(transactionline.netamount) as revenue FROM transactionline JOIN account ON transactionline.account = account.id JOIN transaction ON transactionline.transaction = transaction.id WHERE account.accttype = 'INCOME' AND transaction.trandate >= '2026-01-01'");
+          if (salesItemsAlt && salesItemsAlt[0] && salesItemsAlt[0].revenue !== null) {
+            liveData.revenueYtd = Math.abs(parseFloat(salesItemsAlt[0].revenue));
           }
         } catch (errAlt) {
-          console.warn("Failed to fetch revenue/sales from NetSuite", errAlt);
+          try {
+            const salesItemsAlt2 = await executeQL("SELECT -SUM(transactionline.amount) as revenue FROM transactionline JOIN account ON transactionline.account = account.id JOIN transaction ON transactionline.transaction = transaction.id WHERE account.accttype = 'INCOME' AND transaction.trandate >= '2026-01-01'");
+            if (salesItemsAlt2 && salesItemsAlt2[0] && salesItemsAlt2[0].revenue !== null) {
+              liveData.revenueYtd = Math.abs(parseFloat(salesItemsAlt2[0].revenue));
+            }
+          } catch (errAlt2) {
+            // Fallback to simpler transaction search on the transaction table using standard 'foreigntotal'
+            try {
+              const altItems = await executeQL("SELECT SUM(foreigntotal) as totalSales FROM transaction WHERE type = 'SalesOrd' AND trandate >= '2026-01-01'");
+              if (altItems && altItems[0] && altItems[0].totalSales !== null) {
+                liveData.revenueYtd = Math.abs(parseFloat(altItems[0].totalSales));
+              }
+            } catch (errAlt3) {
+              console.warn("Failed to fetch revenue/sales from NetSuite (all tables failed)", errAlt3);
+            }
+          }
         }
       }
 
-      // 6. Fetch Operating Expenses
+      // 6. Fetch Operating Expenses using standard joined query with schema resilience
       try {
-        const opexItems = await executeQL("SELECT SUM(amount) as opex FROM transactionline JOIN account ON transactionline.account = account.id WHERE account.accttype = 'EXPENSE' AND transactionline.trandate >= '2026-01-01'");
+        const opexItems = await executeQL("SELECT SUM(transactionline.foreignamount) as opex FROM transactionline JOIN account ON transactionline.account = account.id JOIN transaction ON transactionline.transaction = transaction.id WHERE account.accttype = 'EXPENSE' AND transaction.trandate >= '2026-01-01'");
         if (opexItems && opexItems[0] && opexItems[0].opex !== null) {
           liveData.opexYtd = Math.abs(parseFloat(opexItems[0].opex));
         }
       } catch (err) {
-        console.warn("Failed to fetch OPEX from NetSuite", err);
+        try {
+          const opexItemsAlt = await executeQL("SELECT SUM(transactionline.netamount) as opex FROM transactionline JOIN account ON transactionline.account = account.id JOIN transaction ON transactionline.transaction = transaction.id WHERE account.accttype = 'EXPENSE' AND transaction.trandate >= '2026-01-01'");
+          if (opexItemsAlt && opexItemsAlt[0] && opexItemsAlt[0].opex !== null) {
+            liveData.opexYtd = Math.abs(parseFloat(opexItemsAlt[0].opex));
+          }
+        } catch (errAlt) {
+          try {
+            const opexItemsAlt2 = await executeQL("SELECT SUM(transactionline.amount) as opex FROM transactionline JOIN account ON transactionline.account = account.id JOIN transaction ON transactionline.transaction = transaction.id WHERE account.accttype = 'EXPENSE' AND transaction.trandate >= '2026-01-01'");
+            if (opexItemsAlt2 && opexItemsAlt2[0] && opexItemsAlt2[0].opex !== null) {
+              liveData.opexYtd = Math.abs(parseFloat(opexItemsAlt2[0].opex));
+            }
+          } catch (errAlt2) {
+            console.warn("Failed to fetch OPEX from NetSuite (all tables failed)", errAlt2);
+          }
+        }
       }
 
       // Combine real NetSuite pull with deep financial structures
