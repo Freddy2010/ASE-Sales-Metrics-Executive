@@ -193,12 +193,22 @@ app.get("/api/netsuite/status", async (req, res) => {
         resQuery = await tryQuery("SELECT companyname FROM companyinformation");
       }
 
-      // 4. Try transaction if all company queries failed but it's not a credential rejection
+      // 4. Try parent subsidiary (for OneWorld accounts where companyInformation table is restricted/not found)
+      if (!resQuery.ok && resQuery.status !== 401 && resQuery.status !== 403) {
+        resQuery = await tryQuery("SELECT name FROM subsidiary WHERE parent IS NULL");
+      }
+
+      // 5. Try any subsidiary as parent backup
+      if (!resQuery.ok && resQuery.status !== 401 && resQuery.status !== 403) {
+        resQuery = await tryQuery("SELECT name FROM subsidiary");
+      }
+
+      // 6. Try transaction if all company queries failed but it's not a credential rejection
       if (!resQuery.ok && resQuery.status !== 401 && resQuery.status !== 403) {
         resQuery = await tryQuery("SELECT id FROM transaction");
       }
 
-      // 5. Try account if transaction failed
+      // 7. Try account if transaction failed
       if (!resQuery.ok && resQuery.status !== 401 && resQuery.status !== 403) {
         resQuery = await tryQuery("SELECT id FROM account");
       }
@@ -211,7 +221,7 @@ app.get("/api/netsuite/status", async (req, res) => {
         let foundCompanyName = "";
         const data = resQuery.data;
         if (data && data.items && data.items[0]) {
-          foundCompanyName = data.items[0].companyname || "";
+          foundCompanyName = data.items[0].companyname || data.items[0].name || "";
         }
         
         accountInfo = {
@@ -364,10 +374,84 @@ const mockDashboardData = {
   }
 };
 
+// API: Get Subsidiaries list (dynamic from NetSuite if configured)
+app.get("/api/netsuite/subsidiaries", async (req, res) => {
+  const isConfigured = isNetsuiteConfigured();
+  if (!isConfigured) {
+    return res.json([
+      { id: "all", name: "Consolidation (All)", currency: "" },
+      { id: "us", name: "Acme US Inc.", currency: "USD" },
+      { id: "emea", name: "Acme EMEA Ltd.", currency: "EUR" }
+    ]);
+  }
+
+  const config = getNetsuiteConfig();
+  try {
+    const domain = getNetsuiteDomain(config.accountId);
+    const queryUrl = `https://${domain}/services/rest/query/v1/suiteql`;
+
+    const executeQL = async (queryStr: string): Promise<any[]> => {
+      const authHeader = buildNetsuiteOauthHeader("POST", queryUrl);
+      const response = await fetch(queryUrl, {
+        method: "POST",
+        headers: {
+          "Authorization": authHeader,
+          "Content-Type": "application/json",
+          "prefer": "transient",
+        },
+        body: JSON.stringify({ q: queryStr }),
+      });
+      if (!response.ok) {
+        throw new Error(`NetSuite SQL error: ${response.status} - ${await response.text()}`);
+      }
+      const data = await response.json();
+      return data.items || [];
+    };
+
+    // Try multiple variations to fetch subsidiaries:
+    let items: any[] = [];
+    try {
+      items = await executeQL("SELECT id, name, fullname FROM subsidiary ORDER BY fullname");
+    } catch (err) {
+      try {
+        items = await executeQL("SELECT id, name FROM subsidiary ORDER BY name");
+      } catch (err2) {
+        try {
+          items = await executeQL("SELECT id, name FROM subsidiary");
+        } catch (err3) {
+          console.warn("Failed to query subsidiary table directly from NetSuite", err3);
+        }
+      }
+    }
+
+    if (items && items.length > 0) {
+      const subs = items.map((sub: any) => ({
+        id: String(sub.id),
+        name: sub.fullname || sub.name,
+        currency: ""
+      }));
+      return res.json([
+        { id: "all", name: "Consolidation (All)", currency: "" },
+        ...subs
+      ]);
+    } else {
+      throw new Error("No subsidiary items returned");
+    }
+  } catch (err: any) {
+    console.warn("Failed to fetch live subsidiaries, falling back to demo ones", err);
+    return res.json([
+      { id: "all", name: "Consolidation (All) (Offline Fallback)", currency: "" },
+      { id: "us", name: "Acme US Inc. (Demo)", currency: "USD" },
+      { id: "emea", name: "Acme EMEA Ltd. (Demo)", currency: "EUR" }
+    ]);
+  }
+});
+
 // API: Get Combined Financial Dashboard Data
 app.get("/api/netsuite/dashboard", async (req, res) => {
   const isConfigured = isNetsuiteConfigured();
   const config = getNetsuiteConfig();
+  const { subsidiary } = req.query;
 
   if (isConfigured) {
     try {
@@ -392,35 +476,56 @@ app.get("/api/netsuite/dashboard", async (req, res) => {
         return data.items || [];
       };
 
+      const executeWithFallbacks = async (queries: string[]): Promise<any[]> => {
+        let lastError: any = null;
+        for (const q of queries) {
+          try {
+            return await executeQL(q);
+          } catch (err) {
+            lastError = err;
+            console.warn(`Query variation failed: "${q}". Error: ${err}`);
+          }
+        }
+        throw lastError || new Error("All query variations failed");
+      };
+
       const liveData: any = {};
       
-      // 1. Fetch Company Name (safely try both casing variations)
+      // 1. Fetch Company/Subsidiary Name
+      const companyQueries = [
+        "SELECT companyname FROM companyInformation",
+        "SELECT companyname FROM CompanyInformation",
+        "SELECT companyname FROM companyinformation",
+      ];
+      if (subsidiary && subsidiary !== "all" && subsidiary !== "us" && subsidiary !== "emea") {
+        companyQueries.unshift(`SELECT fullname FROM subsidiary WHERE id = ${subsidiary}`);
+        companyQueries.unshift(`SELECT name FROM subsidiary WHERE id = ${subsidiary}`);
+      } else {
+        companyQueries.push("SELECT name FROM subsidiary WHERE parent IS NULL");
+        companyQueries.push("SELECT fullname FROM subsidiary WHERE parent IS NULL");
+        companyQueries.push("SELECT name FROM subsidiary ORDER BY id");
+      }
+
       try {
-        const companyItems = await executeQL("SELECT companyname FROM companyInformation");
+        const companyItems = await executeWithFallbacks(companyQueries);
         if (companyItems && companyItems[0]) {
-          liveData.companyName = companyItems[0].companyname;
+          liveData.companyName = companyItems[0].companyname || companyItems[0].fullname || companyItems[0].name;
         }
       } catch (err) {
-        try {
-          const companyItemsAlt = await executeQL("SELECT companyname FROM CompanyInformation");
-          if (companyItemsAlt && companyItemsAlt[0]) {
-            liveData.companyName = companyItemsAlt[0].companyname;
-          }
-        } catch (errAlt) {
-          try {
-            const companyItemsAlt2 = await executeQL("SELECT companyname FROM companyinformation");
-            if (companyItemsAlt2 && companyItemsAlt2[0]) {
-              liveData.companyName = companyItemsAlt2[0].companyname;
-            }
-          } catch (errAlt2) {
-            console.warn("Failed to fetch company name from NetSuite (all tables failed)", errAlt2);
-          }
-        }
+        console.warn("Failed to fetch company name from NetSuite (all tables failed)", err);
       }
 
       // 2. Fetch Cash Balance (BANK)
+      const bankQueries = [
+        "SELECT SUM(balance) as cash FROM account WHERE accttype = 'BANK'"
+      ];
+      if (subsidiary && subsidiary !== "all" && subsidiary !== "us" && subsidiary !== "emea") {
+        bankQueries.unshift(`SELECT SUM(balance) as cash FROM account WHERE accttype = 'BANK' AND subsidiary = ${subsidiary}`);
+        bankQueries.unshift(`SELECT SUM(transactionline.foreignamount) as cash FROM transactionline JOIN account ON transactionline.account = account.id WHERE account.accttype = 'BANK' AND transactionline.subsidiary = ${subsidiary}`);
+      }
+
       try {
-        const bankItems = await executeQL("SELECT SUM(balance) as cash FROM account WHERE accttype = 'BANK'");
+        const bankItems = await executeWithFallbacks(bankQueries);
         if (bankItems && bankItems[0] && bankItems[0].cash !== null) {
           liveData.cashBalance = Math.abs(parseFloat(bankItems[0].cash));
         }
@@ -428,9 +533,22 @@ app.get("/api/netsuite/dashboard", async (req, res) => {
         console.warn("Failed to fetch cash balance from NetSuite", err);
       }
 
-      // 3. Fetch AR Balance (Accounts Receivable) - avoiding 'isopen' field which is not standard SuiteQL
+      // 3. Fetch AR Balance (Accounts Receivable)
+      const arQueries = [];
+      if (subsidiary && subsidiary !== "all" && subsidiary !== "us" && subsidiary !== "emea") {
+        arQueries.push(`SELECT SUM(foreignamountunpaid) as ar FROM transaction WHERE type = 'CustInvc' AND foreignamountunpaid > 0 AND subsidiary = ${subsidiary}`);
+        arQueries.push(`SELECT SUM(amountunpaid) as ar FROM transaction WHERE type = 'CustInvc' AND amountunpaid > 0 AND subsidiary = ${subsidiary}`);
+        arQueries.push(`SELECT SUM(foreignamount) as ar FROM transaction WHERE type = 'CustInvc' AND foreignamount > 0 AND subsidiary = ${subsidiary}`);
+        arQueries.push(`SELECT SUM(amount) as ar FROM transaction WHERE type = 'CustInvc' AND amount > 0 AND subsidiary = ${subsidiary}`);
+      } else {
+        arQueries.push("SELECT SUM(foreignamountunpaid) as ar FROM transaction WHERE type = 'CustInvc' AND foreignamountunpaid > 0");
+        arQueries.push("SELECT SUM(amountunpaid) as ar FROM transaction WHERE type = 'CustInvc' AND amountunpaid > 0");
+        arQueries.push("SELECT SUM(foreignamount) as ar FROM transaction WHERE type = 'CustInvc' AND foreignamount > 0");
+        arQueries.push("SELECT SUM(amount) as ar FROM transaction WHERE type = 'CustInvc' AND amount > 0");
+      }
+
       try {
-        const arItems = await executeQL("SELECT SUM(amountremaining) as ar FROM transaction WHERE type = 'CustInvc' AND amountremaining > 0");
+        const arItems = await executeWithFallbacks(arQueries);
         if (arItems && arItems[0] && arItems[0].ar !== null) {
           liveData.arOutstanding = Math.abs(parseFloat(arItems[0].ar));
         }
@@ -438,9 +556,22 @@ app.get("/api/netsuite/dashboard", async (req, res) => {
         console.warn("Failed to fetch AR outstanding balance from NetSuite", err);
       }
 
-      // 4. Fetch AP Balance (Accounts Payable) - avoiding 'isopen' field which is not standard SuiteQL
+      // 4. Fetch AP Balance (Accounts Payable)
+      const apQueries = [];
+      if (subsidiary && subsidiary !== "all" && subsidiary !== "us" && subsidiary !== "emea") {
+        apQueries.push(`SELECT SUM(foreignamountunpaid) as ap FROM transaction WHERE type = 'VendBill' AND foreignamountunpaid > 0 AND subsidiary = ${subsidiary}`);
+        apQueries.push(`SELECT SUM(amountunpaid) as ap FROM transaction WHERE type = 'VendBill' AND amountunpaid > 0 AND subsidiary = ${subsidiary}`);
+        apQueries.push(`SELECT SUM(foreignamount) as ap FROM transaction WHERE type = 'VendBill' AND foreignamount > 0 AND subsidiary = ${subsidiary}`);
+        apQueries.push(`SELECT SUM(amount) as ap FROM transaction WHERE type = 'VendBill' AND amount > 0 AND subsidiary = ${subsidiary}`);
+      } else {
+        apQueries.push("SELECT SUM(foreignamountunpaid) as ap FROM transaction WHERE type = 'VendBill' AND foreignamountunpaid > 0");
+        apQueries.push("SELECT SUM(amountunpaid) as ap FROM transaction WHERE type = 'VendBill' AND amountunpaid > 0");
+        apQueries.push("SELECT SUM(foreignamount) as ap FROM transaction WHERE type = 'VendBill' AND foreignamount > 0");
+        apQueries.push("SELECT SUM(amount) as ap FROM transaction WHERE type = 'VendBill' AND amount > 0");
+      }
+
       try {
-        const apItems = await executeQL("SELECT SUM(amountremaining) as ap FROM transaction WHERE type = 'VendBill' AND amountremaining > 0");
+        const apItems = await executeWithFallbacks(apQueries);
         if (apItems && apItems[0] && apItems[0].ap !== null) {
           liveData.apOutstanding = Math.abs(parseFloat(apItems[0].ap));
         }
@@ -449,59 +580,52 @@ app.get("/api/netsuite/dashboard", async (req, res) => {
       }
 
       // 5. Fetch YTD Sales/Revenue (Income Accounts) using standard joined query with schema resilience
+      const revenueQueries = [];
+      if (subsidiary && subsidiary !== "all" && subsidiary !== "us" && subsidiary !== "emea") {
+        revenueQueries.push(`SELECT -SUM(transactionline.foreignamount) as revenue FROM transactionline JOIN account ON transactionline.account = account.id JOIN transaction ON transactionline.transaction = transaction.id WHERE account.accttype = 'INCOME' AND transaction.trandate >= '2026-01-01' AND transactionline.subsidiary = ${subsidiary}`);
+        revenueQueries.push(`SELECT -SUM(transactionline.foreignamount) as revenue FROM transactionline JOIN account ON transactionline.account = account.id JOIN transaction ON transactionline.transaction = transaction.id WHERE account.accttype = 'INCOME' AND transaction.trandate >= '2026-01-01' AND transaction.subsidiary = ${subsidiary}`);
+        revenueQueries.push(`SELECT -SUM(transactionline.netamount) as revenue FROM transactionline JOIN account ON transactionline.account = account.id JOIN transaction ON transactionline.transaction = transaction.id WHERE account.accttype = 'INCOME' AND transaction.trandate >= '2026-01-01' AND transactionline.subsidiary = ${subsidiary}`);
+        revenueQueries.push(`SELECT -SUM(transactionline.amount) as revenue FROM transactionline JOIN account ON transactionline.account = account.id JOIN transaction ON transactionline.transaction = transaction.id WHERE account.accttype = 'INCOME' AND transaction.trandate >= '2026-01-01' AND transactionline.subsidiary = ${subsidiary}`);
+        revenueQueries.push(`SELECT SUM(foreigntotal) as totalSales FROM transaction WHERE type = 'SalesOrd' AND trandate >= '2026-01-01' AND subsidiary = ${subsidiary}`);
+      } else {
+        revenueQueries.push("SELECT -SUM(transactionline.foreignamount) as revenue FROM transactionline JOIN account ON transactionline.account = account.id JOIN transaction ON transactionline.transaction = transaction.id WHERE account.accttype = 'INCOME' AND transaction.trandate >= '2026-01-01'");
+        revenueQueries.push("SELECT -SUM(transactionline.netamount) as revenue FROM transactionline JOIN account ON transactionline.account = account.id JOIN transaction ON transactionline.transaction = transaction.id WHERE account.accttype = 'INCOME' AND transaction.trandate >= '2026-01-01'");
+        revenueQueries.push("SELECT -SUM(transactionline.amount) as revenue FROM transactionline JOIN account ON transactionline.account = account.id JOIN transaction ON transactionline.transaction = transaction.id WHERE account.accttype = 'INCOME' AND transaction.trandate >= '2026-01-01'");
+        revenueQueries.push("SELECT SUM(foreigntotal) as totalSales FROM transaction WHERE type = 'SalesOrd' AND trandate >= '2026-01-01'");
+      }
+
       try {
-        const salesItems = await executeQL("SELECT -SUM(transactionline.foreignamount) as revenue FROM transactionline JOIN account ON transactionline.account = account.id JOIN transaction ON transactionline.transaction = transaction.id WHERE account.accttype = 'INCOME' AND transaction.trandate >= '2026-01-01'");
-        if (salesItems && salesItems[0] && salesItems[0].revenue !== null) {
-          liveData.revenueYtd = Math.abs(parseFloat(salesItems[0].revenue));
+        const salesItems = await executeWithFallbacks(revenueQueries);
+        if (salesItems && salesItems[0]) {
+          const val = salesItems[0].revenue !== undefined ? salesItems[0].revenue : salesItems[0].totalSales;
+          if (val !== null) {
+            liveData.revenueYtd = Math.abs(parseFloat(val));
+          }
         }
       } catch (err) {
-        try {
-          const salesItemsAlt = await executeQL("SELECT -SUM(transactionline.netamount) as revenue FROM transactionline JOIN account ON transactionline.account = account.id JOIN transaction ON transactionline.transaction = transaction.id WHERE account.accttype = 'INCOME' AND transaction.trandate >= '2026-01-01'");
-          if (salesItemsAlt && salesItemsAlt[0] && salesItemsAlt[0].revenue !== null) {
-            liveData.revenueYtd = Math.abs(parseFloat(salesItemsAlt[0].revenue));
-          }
-        } catch (errAlt) {
-          try {
-            const salesItemsAlt2 = await executeQL("SELECT -SUM(transactionline.amount) as revenue FROM transactionline JOIN account ON transactionline.account = account.id JOIN transaction ON transactionline.transaction = transaction.id WHERE account.accttype = 'INCOME' AND transaction.trandate >= '2026-01-01'");
-            if (salesItemsAlt2 && salesItemsAlt2[0] && salesItemsAlt2[0].revenue !== null) {
-              liveData.revenueYtd = Math.abs(parseFloat(salesItemsAlt2[0].revenue));
-            }
-          } catch (errAlt2) {
-            // Fallback to simpler transaction search on the transaction table using standard 'foreigntotal'
-            try {
-              const altItems = await executeQL("SELECT SUM(foreigntotal) as totalSales FROM transaction WHERE type = 'SalesOrd' AND trandate >= '2026-01-01'");
-              if (altItems && altItems[0] && altItems[0].totalSales !== null) {
-                liveData.revenueYtd = Math.abs(parseFloat(altItems[0].totalSales));
-              }
-            } catch (errAlt3) {
-              console.warn("Failed to fetch revenue/sales from NetSuite (all tables failed)", errAlt3);
-            }
-          }
-        }
+        console.warn("Failed to fetch revenue/sales from NetSuite (all tables failed)", err);
       }
 
       // 6. Fetch Operating Expenses using standard joined query with schema resilience
+      const opexQueries = [];
+      if (subsidiary && subsidiary !== "all" && subsidiary !== "us" && subsidiary !== "emea") {
+        opexQueries.push(`SELECT SUM(transactionline.foreignamount) as opex FROM transactionline JOIN account ON transactionline.account = account.id JOIN transaction ON transactionline.transaction = transaction.id WHERE account.accttype = 'EXPENSE' AND transaction.trandate >= '2026-01-01' AND transactionline.subsidiary = ${subsidiary}`);
+        opexQueries.push(`SELECT SUM(transactionline.foreignamount) as opex FROM transactionline JOIN account ON transactionline.account = account.id JOIN transaction ON transactionline.transaction = transaction.id WHERE account.accttype = 'EXPENSE' AND transaction.trandate >= '2026-01-01' AND transaction.subsidiary = ${subsidiary}`);
+        opexQueries.push(`SELECT SUM(transactionline.netamount) as opex FROM transactionline JOIN account ON transactionline.account = account.id JOIN transaction ON transactionline.transaction = transaction.id WHERE account.accttype = 'EXPENSE' AND transaction.trandate >= '2026-01-01' AND transactionline.subsidiary = ${subsidiary}`);
+        opexQueries.push(`SELECT SUM(transactionline.amount) as opex FROM transactionline JOIN account ON transactionline.account = account.id JOIN transaction ON transactionline.transaction = transaction.id WHERE account.accttype = 'EXPENSE' AND transaction.trandate >= '2026-01-01' AND transactionline.subsidiary = ${subsidiary}`);
+      } else {
+        opexQueries.push("SELECT SUM(transactionline.foreignamount) as opex FROM transactionline JOIN account ON transactionline.account = account.id JOIN transaction ON transactionline.transaction = transaction.id WHERE account.accttype = 'EXPENSE' AND transaction.trandate >= '2026-01-01'");
+        opexQueries.push("SELECT SUM(transactionline.netamount) as opex FROM transactionline JOIN account ON transactionline.account = account.id JOIN transaction ON transactionline.transaction = transaction.id WHERE account.accttype = 'EXPENSE' AND transaction.trandate >= '2026-01-01'");
+        opexQueries.push("SELECT SUM(transactionline.amount) as opex FROM transactionline JOIN account ON transactionline.account = account.id JOIN transaction ON transactionline.transaction = transaction.id WHERE account.accttype = 'EXPENSE' AND transaction.trandate >= '2026-01-01'");
+      }
+
       try {
-        const opexItems = await executeQL("SELECT SUM(transactionline.foreignamount) as opex FROM transactionline JOIN account ON transactionline.account = account.id JOIN transaction ON transactionline.transaction = transaction.id WHERE account.accttype = 'EXPENSE' AND transaction.trandate >= '2026-01-01'");
+        const opexItems = await executeWithFallbacks(opexQueries);
         if (opexItems && opexItems[0] && opexItems[0].opex !== null) {
           liveData.opexYtd = Math.abs(parseFloat(opexItems[0].opex));
         }
       } catch (err) {
-        try {
-          const opexItemsAlt = await executeQL("SELECT SUM(transactionline.netamount) as opex FROM transactionline JOIN account ON transactionline.account = account.id JOIN transaction ON transactionline.transaction = transaction.id WHERE account.accttype = 'EXPENSE' AND transaction.trandate >= '2026-01-01'");
-          if (opexItemsAlt && opexItemsAlt[0] && opexItemsAlt[0].opex !== null) {
-            liveData.opexYtd = Math.abs(parseFloat(opexItemsAlt[0].opex));
-          }
-        } catch (errAlt) {
-          try {
-            const opexItemsAlt2 = await executeQL("SELECT SUM(transactionline.amount) as opex FROM transactionline JOIN account ON transactionline.account = account.id JOIN transaction ON transactionline.transaction = transaction.id WHERE account.accttype = 'EXPENSE' AND transaction.trandate >= '2026-01-01'");
-            if (opexItemsAlt2 && opexItemsAlt2[0] && opexItemsAlt2[0].opex !== null) {
-              liveData.opexYtd = Math.abs(parseFloat(opexItemsAlt2[0].opex));
-            }
-          } catch (errAlt2) {
-            console.warn("Failed to fetch OPEX from NetSuite (all tables failed)", errAlt2);
-          }
-        }
+        console.warn("Failed to fetch OPEX from NetSuite (all tables failed)", err);
       }
 
       // Combine real NetSuite pull with deep financial structures

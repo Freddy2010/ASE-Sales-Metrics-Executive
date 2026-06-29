@@ -15,6 +15,7 @@ export default function App() {
   const [dashboardData, setDashboardData] = useState<DashboardData | null>(null);
   const [loading, setLoading] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
+  const [subsidiaries, setSubsidiaries] = useState<Array<{ id: string; name: string; currency?: string }>>([]);
 
   // Filter States (Standard NetSuite Segments)
   const [selectedSubsidiary, setSelectedSubsidiary] = useState<string>("all");
@@ -36,18 +37,27 @@ export default function App() {
   const [comparePeriods, setComparePeriods] = useState<boolean>(false);
   const [compareLoading, setCompareLoading] = useState<boolean>(false);
 
-  const syncData = async () => {
+  const syncData = async (subId?: string) => {
     setLoading(true);
     setError(null);
     try {
+      const activeSub = subId !== undefined ? subId : selectedSubsidiary;
+
       // 1. Fetch connection status
       const statusRes = await fetch("/api/netsuite/status");
       if (!statusRes.ok) throw new Error("Failed to contact server API status.");
       const statusData = await statusRes.json();
       setNetsuiteStatus(statusData);
 
-      // 2. Fetch financial dashboard metrics
-      const dashboardRes = await fetch("/api/netsuite/dashboard");
+      // 2. Fetch live subsidiaries if connected
+      const subsRes = await fetch("/api/netsuite/subsidiaries");
+      if (subsRes.ok) {
+        const subsData = await subsRes.json();
+        setSubsidiaries(subsData);
+      }
+
+      // 3. Fetch financial dashboard metrics with subsidiary filter
+      const dashboardRes = await fetch(`/api/netsuite/dashboard?subsidiary=${activeSub}`);
       if (!dashboardRes.ok) throw new Error("Failed to contact server financial data API.");
       const data = await dashboardRes.json();
       setDashboardData(data);
@@ -71,12 +81,19 @@ export default function App() {
 
     // 1. Handle Subsidiary selection
     let subScale = 1.0;
+    const isDynamicSub = selectedSubsidiary !== "all" && selectedSubsidiary !== "us" && selectedSubsidiary !== "emea";
     if (selectedSubsidiary === "us") {
       filtered.companyName = "Acme US Inc. (NetSuite Subsidiary ID: 4)";
       subScale = 0.7;
     } else if (selectedSubsidiary === "emea") {
       filtered.companyName = "Acme EMEA Ltd. (NetSuite Subsidiary ID: 8)";
       subScale = 0.3;
+    } else if (isDynamicSub && subsidiaries.length > 0) {
+      const match = subsidiaries.find(s => s.id === selectedSubsidiary);
+      if (match) {
+        filtered.companyName = match.name;
+      }
+      subScale = 1.0; // Dynamic ones already filtered on server side
     }
 
     // 2. Handle Department / Cost Center selection
@@ -354,12 +371,26 @@ export default function App() {
             <Layers className="w-3.5 h-3.5 text-slate-400" />
             <select
               value={selectedSubsidiary}
-              onChange={(e) => setSelectedSubsidiary(e.target.value)}
+              onChange={(e) => {
+                const val = e.target.value;
+                setSelectedSubsidiary(val);
+                syncData(val);
+              }}
               className="bg-white border border-slate-200 text-slate-700 rounded-lg px-2.5 py-1.5 focus:outline-none focus:border-slate-400 focus:ring-1 focus:ring-slate-400 text-[11px] font-semibold font-sans"
             >
-              <option value="all">Subsidiary: Consolidation (All)</option>
-              <option value="us">Subsidiary: Acme US Inc. (USD)</option>
-              <option value="emea">Subsidiary: Acme EMEA Ltd. (EUR)</option>
+              {subsidiaries.length > 0 ? (
+                subsidiaries.map((sub) => (
+                  <option key={sub.id} value={sub.id}>
+                    {sub.id === "all" ? sub.name : `Subsidiary: ${sub.name}`}
+                  </option>
+                ))
+              ) : (
+                <>
+                  <option value="all">Subsidiary: Consolidation (All)</option>
+                  <option value="us">Subsidiary: Acme US Inc. (USD)</option>
+                  <option value="emea">Subsidiary: Acme EMEA Ltd. (EUR)</option>
+                </>
+              )}
             </select>
           </div>
 
