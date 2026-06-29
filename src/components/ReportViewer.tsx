@@ -136,8 +136,8 @@ export default function ReportViewer({ incomeStatement, balanceSheet, arAging }:
                 filterCategories(incomeStatement.revenue.categories).map((cat, i) => (
                   <tr key={i} className="hover:bg-slate-50/50 text-slate-700">
                     <td className="py-2.5 pl-8 pr-2 font-sans font-medium">{cat.name}</td>
-                    <td className="py-2.5 text-right pr-2 font-mono">{cat.value.toLocaleString()}</td>
-                    <td className="py-2.5 text-right text-slate-500 font-mono">{((cat.value / revTotal) * 100).toFixed(1)}%</td>
+                    <td className="py-2.5 text-right pr-2 font-mono">{(cat.value ?? 0).toLocaleString()}</td>
+                    <td className="py-2.5 text-right text-slate-500 font-mono">{(((cat.value ?? 0) / (revTotal || 1)) * 100).toFixed(1)}%</td>
                     <td className="py-2.5 text-right font-mono">
                       <span className={`px-1.5 py-0.5 rounded text-[10px] font-bold ${cat.change >= 0 ? "text-emerald-700 bg-emerald-50" : "text-rose-700 bg-rose-50"}`}>
                         {cat.change >= 0 ? `+${cat.change}%` : `${cat.change}%`}
@@ -156,15 +156,15 @@ export default function ReportViewer({ incomeStatement, balanceSheet, arAging }:
                   Cost of Goods Sold (COGS)
                 </td>
                 <td className="py-3 text-right pr-2">{formatCurrency(cogsTotal)}</td>
-                <td className="py-3 text-right text-slate-500">{((cogsTotal / revTotal) * 100).toFixed(1)}%</td>
+                <td className="py-3 text-right text-slate-500">{(((cogsTotal || 0) / (revTotal || 1)) * 100).toFixed(1)}%</td>
                 <td className="py-3 text-right text-rose-700 font-bold font-mono">+4.2%</td>
               </tr>
               {expandedSections.cogs &&
                 filterCategories(incomeStatement.cogs.categories).map((cat, i) => (
                   <tr key={i} className="hover:bg-slate-50/50 text-slate-700">
                     <td className="py-2.5 pl-8 pr-2 font-sans font-medium">{cat.name}</td>
-                    <td className="py-2.5 text-right pr-2 font-mono">{cat.value.toLocaleString()}</td>
-                    <td className="py-2.5 text-right text-slate-500 font-mono">{((cat.value / revTotal) * 100).toFixed(1)}%</td>
+                    <td className="py-2.5 text-right pr-2 font-mono">{(cat.value ?? 0).toLocaleString()}</td>
+                    <td className="py-2.5 text-right text-slate-500 font-mono">{(((cat.value ?? 0) / (revTotal || 1)) * 100).toFixed(1)}%</td>
                     <td className="py-2.5 text-right font-mono">
                       <span className={`px-1.5 py-0.5 rounded text-[10px] font-bold ${cat.change >= 0 ? "text-rose-700 bg-rose-50" : "text-emerald-700 bg-emerald-50"}`}>
                         {cat.change >= 0 ? `+${cat.change}%` : `${cat.change}%`}
@@ -177,7 +177,7 @@ export default function ReportViewer({ incomeStatement, balanceSheet, arAging }:
               <tr className="bg-emerald-50 border-y border-emerald-100 text-emerald-800 font-bold font-display text-sm">
                 <td className="py-3 pl-2">GROSS PROFIT</td>
                 <td className="py-3 text-right pr-2">{formatCurrency(grossProfit)}</td>
-                <td className="py-3 text-right">{((grossProfit / revTotal) * 100).toFixed(1)}%</td>
+                <td className="py-3 text-right">{(((grossProfit || 0) / (revTotal || 1)) * 100).toFixed(1)}%</td>
                 <td className="py-3 text-right font-mono font-bold">+16.8%</td>
               </tr>
 
@@ -191,15 +191,15 @@ export default function ReportViewer({ incomeStatement, balanceSheet, arAging }:
                   Operating Expenses (OPEX)
                 </td>
                 <td className="py-3 text-right pr-2">{formatCurrency(opexTotal)}</td>
-                <td className="py-3 text-right text-slate-500">{((opexTotal / revTotal) * 100).toFixed(1)}%</td>
+                <td className="py-3 text-right text-slate-500">{(((opexTotal || 0) / (revTotal || 1)) * 100).toFixed(1)}%</td>
                 <td className="py-3 text-right text-emerald-700 font-bold font-mono">-1.3%</td>
               </tr>
               {expandedSections.opex &&
                 filterCategories(incomeStatement.opex.categories).map((cat, i) => (
                   <tr key={i} className="hover:bg-slate-50/50 text-slate-700">
                     <td className="py-2.5 pl-8 pr-2 font-sans font-medium">{cat.name}</td>
-                    <td className="py-2.5 text-right pr-2 font-mono">{cat.value.toLocaleString()}</td>
-                    <td className="py-2.5 text-right text-slate-500 font-mono">{((cat.value / revTotal) * 100).toFixed(1)}%</td>
+                    <td className="py-2.5 text-right pr-2 font-mono">{(cat.value ?? 0).toLocaleString()}</td>
+                    <td className="py-2.5 text-right text-slate-500 font-mono">{(((cat.value ?? 0) / (revTotal || 1)) * 100).toFixed(1)}%</td>
                     <td className="py-2.5 text-right font-mono">
                       <span className={`px-1.5 py-0.5 rounded text-[10px] font-bold ${cat.change < 0 ? "text-emerald-700 bg-emerald-50" : "text-rose-700 bg-rose-50"}`}>
                         {cat.change >= 0 ? `+${cat.change}%` : `${cat.change}%`}
@@ -212,7 +212,7 @@ export default function ReportViewer({ incomeStatement, balanceSheet, arAging }:
               <tr className="bg-slate-50 font-bold text-slate-900 text-xs border-y border-slate-200">
                 <td className="py-3 pl-2 uppercase">Operating Income (EBITDA)</td>
                 <td className="py-3 text-right pr-2">{formatCurrency(operatingProfit)}</td>
-                <td className="py-3 text-right">{((operatingProfit / revTotal) * 100).toFixed(1)}%</td>
+                <td className="py-3 text-right">{(((operatingProfit || 0) / (revTotal || 1)) * 100).toFixed(1)}%</td>
                 <td className="py-3 text-right font-mono font-bold text-emerald-700">+24.5%</td>
               </tr>
 
@@ -226,15 +226,15 @@ export default function ReportViewer({ incomeStatement, balanceSheet, arAging }:
                   Taxes, Amortization & Adjustments
                 </td>
                 <td className="py-3 text-right pr-2">{formatCurrency(otherTotal)}</td>
-                <td className="py-3 text-right text-slate-500">{((otherTotal / revTotal) * 100).toFixed(1)}%</td>
+                <td className="py-3 text-right text-slate-500">{(((otherTotal || 0) / (revTotal || 1)) * 100).toFixed(1)}%</td>
                 <td className="py-3 text-right text-rose-700 font-bold font-mono">+6.8%</td>
               </tr>
               {expandedSections.other &&
                 filterCategories(incomeStatement.otherExpenses.categories).map((cat, i) => (
                   <tr key={i} className="hover:bg-slate-50/50 text-slate-700">
                     <td className="py-2.5 pl-8 pr-2 font-sans font-medium">{cat.name}</td>
-                    <td className="py-2.5 text-right pr-2 font-mono">{cat.value.toLocaleString()}</td>
-                    <td className="py-2.5 text-right text-slate-500 font-mono">{((cat.value / revTotal) * 100).toFixed(1)}%</td>
+                    <td className="py-2.5 text-right pr-2 font-mono">{(cat.value ?? 0).toLocaleString()}</td>
+                    <td className="py-2.5 text-right text-slate-500 font-mono">{(((cat.value ?? 0) / (revTotal || 1)) * 100).toFixed(1)}%</td>
                     <td className="py-2.5 text-right font-mono">
                       <span className={`px-1.5 py-0.5 rounded text-[10px] font-bold ${cat.change >= 0 ? "text-rose-700 bg-rose-50" : "text-emerald-700 bg-emerald-50"}`}>
                         {cat.change >= 0 ? `+${cat.change}%` : `${cat.change}%`}
@@ -247,7 +247,7 @@ export default function ReportViewer({ incomeStatement, balanceSheet, arAging }:
               <tr className="bg-blue-50/60 border-t-2 border-blue-600 text-blue-800 font-bold font-display text-base">
                 <td className="py-4 pl-2 uppercase tracking-wide">YTD NET INCOME</td>
                 <td className="py-4 text-right pr-2 font-mono">{formatCurrency(netIncome)}</td>
-                <td className="py-4 text-right font-mono">{((netIncome / revTotal) * 100).toFixed(1)}%</td>
+                <td className="py-4 text-right font-mono">{(((netIncome || 0) / (revTotal || 1)) * 100).toFixed(1)}%</td>
                 <td className="py-4 text-right font-mono font-bold text-emerald-700">+27.6%</td>
               </tr>
             </tbody>
@@ -267,12 +267,12 @@ export default function ReportViewer({ incomeStatement, balanceSheet, arAging }:
                   {balanceSheet.assets.current.map((item, idx) => (
                     <div key={idx} className="flex justify-between py-1.5 border-b border-slate-100 font-medium">
                       <span>{item.name}</span>
-                      <span className="font-mono text-slate-950 font-bold">{item.value.toLocaleString()}</span>
+                      <span className="font-mono text-slate-950 font-bold">{(item.value ?? 0).toLocaleString()}</span>
                     </div>
                   ))}
                   <div className="flex justify-between py-2 border-b border-slate-200 font-bold text-slate-800">
                     <span>Total Current Assets</span>
-                    <span className="font-mono">{currentAssetsTotal.toLocaleString()}</span>
+                    <span className="font-mono">{(currentAssetsTotal ?? 0).toLocaleString()}</span>
                   </div>
                 </div>
               </div>
@@ -283,12 +283,12 @@ export default function ReportViewer({ incomeStatement, balanceSheet, arAging }:
                   {balanceSheet.assets.nonCurrent.map((item, idx) => (
                     <div key={idx} className="flex justify-between py-1.5 border-b border-slate-100 font-medium">
                       <span>{item.name}</span>
-                      <span className="font-mono text-slate-950 font-bold">{item.value.toLocaleString()}</span>
+                      <span className="font-mono text-slate-950 font-bold">{(item.value ?? 0).toLocaleString()}</span>
                     </div>
                   ))}
                   <div className="flex justify-between py-2 border-b border-slate-200 font-bold text-slate-800">
                     <span>Total Non-Current Assets</span>
-                    <span className="font-mono">{nonCurrentAssetsTotal.toLocaleString()}</span>
+                    <span className="font-mono">{(nonCurrentAssetsTotal ?? 0).toLocaleString()}</span>
                   </div>
                 </div>
               </div>
@@ -309,12 +309,12 @@ export default function ReportViewer({ incomeStatement, balanceSheet, arAging }:
                   {balanceSheet.liabilities.current.map((item, idx) => (
                     <div key={idx} className="flex justify-between py-1.5 border-b border-slate-100 font-medium">
                       <span>{item.name}</span>
-                      <span className="font-mono text-slate-950 font-bold">{item.value.toLocaleString()}</span>
+                      <span className="font-mono text-slate-950 font-bold">{(item.value ?? 0).toLocaleString()}</span>
                     </div>
                   ))}
                   <div className="flex justify-between py-2 border-b border-slate-200 font-bold text-slate-800">
                     <span>Total Current Liabilities</span>
-                    <span className="font-mono">{currentLiabilitiesTotal.toLocaleString()}</span>
+                    <span className="font-mono">{(currentLiabilitiesTotal ?? 0).toLocaleString()}</span>
                   </div>
                 </div>
               </div>
@@ -325,12 +325,12 @@ export default function ReportViewer({ incomeStatement, balanceSheet, arAging }:
                   {balanceSheet.liabilities.nonCurrent.map((item, idx) => (
                     <div key={idx} className="flex justify-between py-1.5 border-b border-slate-100 font-medium">
                       <span>{item.name}</span>
-                      <span className="font-mono text-slate-950 font-bold">{item.value.toLocaleString()}</span>
+                      <span className="font-mono text-slate-950 font-bold">{(item.value ?? 0).toLocaleString()}</span>
                     </div>
                   ))}
                   <div className="flex justify-between py-2 border-b border-slate-200 font-bold text-slate-800">
                     <span>Total Non-Current Liabilities</span>
-                    <span className="font-mono">{nonCurrentLiabilitiesTotal.toLocaleString()}</span>
+                    <span className="font-mono">{(nonCurrentLiabilitiesTotal ?? 0).toLocaleString()}</span>
                   </div>
                 </div>
               </div>
@@ -341,12 +341,12 @@ export default function ReportViewer({ incomeStatement, balanceSheet, arAging }:
                   {balanceSheet.equity.map((item, idx) => (
                     <div key={idx} className="flex justify-between py-1.5 border-b border-slate-100 font-medium">
                       <span>{item.name}</span>
-                      <span className="font-mono text-slate-950 font-bold">{item.value.toLocaleString()}</span>
+                      <span className="font-mono text-slate-950 font-bold">{(item.value ?? 0).toLocaleString()}</span>
                     </div>
                   ))}
                   <div className="flex justify-between py-2 border-b border-slate-200 font-bold text-slate-800">
                     <span>Total Shareholders' Equity</span>
-                    <span className="font-mono">{totalEquity.toLocaleString()}</span>
+                    <span className="font-mono">{(totalEquity ?? 0).toLocaleString()}</span>
                   </div>
                 </div>
               </div>
@@ -392,7 +392,7 @@ export default function ReportViewer({ incomeStatement, balanceSheet, arAging }:
                     <div key={idx} className={`border rounded-xl p-4 flex flex-col justify-between shadow-2xs ${bucketColor}`}>
                       <span className="text-[10px] uppercase font-bold tracking-wider text-slate-500">{bucket.label}</span>
                       <div className="mt-2">
-                        <span className="text-xl font-display font-bold text-slate-900">{bucket.value.toLocaleString()}</span>
+                        <span className="text-xl font-display font-bold text-slate-900">{(bucket.value ?? 0).toLocaleString()}</span>
                         <span className="text-[10px] text-slate-500 font-medium block mt-0.5">{bucket.percent}% of outstanding AR</span>
                       </div>
                     </div>
@@ -429,7 +429,7 @@ export default function ReportViewer({ incomeStatement, balanceSheet, arAging }:
                     return (
                       <tr key={idx} className="hover:bg-slate-50/50 text-slate-700">
                         <td className="py-3 px-2 font-bold text-slate-900">{debt.company}</td>
-                        <td className="py-3 text-right pr-2 font-mono font-bold text-slate-900">{debt.amount.toLocaleString()}</td>
+                        <td className="py-3 text-right pr-2 font-mono font-bold text-slate-900">{(debt.amount ?? 0).toLocaleString()}</td>
                         <td className="py-3 text-right pr-2 font-mono font-semibold text-slate-600">{debt.days} Days</td>
                         <td className="py-3 text-right">
                           <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-bold uppercase font-sans ${riskColor}`}>

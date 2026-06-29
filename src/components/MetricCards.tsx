@@ -11,6 +11,7 @@ interface Props {
 }
 
 export function formatCurrency(num: number): string {
+  if (num === null || num === undefined || isNaN(num)) return "$0";
   if (num === 0) return "$0";
   if (Math.abs(num) >= 1000000) {
     return `$${(num / 1000000).toFixed(2)}M`;

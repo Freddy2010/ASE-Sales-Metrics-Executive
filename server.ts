@@ -490,38 +490,56 @@ app.get("/api/netsuite/dashboard", async (req, res) => {
       };
 
       const liveData: any = {};
-      
+
+      // 0. Detect actual dynamic reporting year based on data in the database
+      let reportingYear = 2026;
+      try {
+        const maxDateQueries = [
+          "SELECT MAX(trandate) as maxdate FROM transaction",
+          "SELECT MAX(trandate) as maxdate FROM transactionline"
+        ];
+        const maxDateItems = await executeWithFallbacks(maxDateQueries);
+        if (maxDateItems && maxDateItems[0] && maxDateItems[0].maxdate) {
+          const maxDateStr = String(maxDateItems[0].maxdate);
+          const matchedYear = new Date(maxDateStr).getFullYear();
+          if (matchedYear && matchedYear > 2000 && matchedYear <= 2026) {
+            reportingYear = matchedYear;
+            console.log(`Live ERP: Detected latest data year is ${reportingYear}`);
+          }
+        }
+      } catch (err) {
+        console.log("Failed to auto-detect latest data year, using default 2026.");
+      }
+
       // 1. Fetch Company/Subsidiary Name
-      const companyQueries = [
-        "SELECT companyname FROM companyInformation",
-        "SELECT companyname FROM CompanyInformation",
-        "SELECT companyname FROM companyinformation",
-      ];
+      const companyQueries = [];
       if (subsidiary && subsidiary !== "all" && subsidiary !== "us" && subsidiary !== "emea") {
-        companyQueries.unshift(`SELECT fullname FROM subsidiary WHERE id = ${subsidiary}`);
-        companyQueries.unshift(`SELECT name FROM subsidiary WHERE id = ${subsidiary}`);
+        companyQueries.push(`SELECT fullname FROM subsidiary WHERE id = ${subsidiary}`);
+        companyQueries.push(`SELECT name FROM subsidiary WHERE id = ${subsidiary}`);
       } else {
-        companyQueries.push("SELECT name FROM subsidiary WHERE parent IS NULL");
         companyQueries.push("SELECT fullname FROM subsidiary WHERE parent IS NULL");
+        companyQueries.push("SELECT name FROM subsidiary WHERE parent IS NULL");
+        companyQueries.push("SELECT companyname FROM companyInformation");
         companyQueries.push("SELECT name FROM subsidiary ORDER BY id");
       }
 
       try {
         const companyItems = await executeWithFallbacks(companyQueries);
         if (companyItems && companyItems[0]) {
-          liveData.companyName = companyItems[0].companyname || companyItems[0].fullname || companyItems[0].name;
+          liveData.companyName = companyItems[0].fullname || companyItems[0].name || companyItems[0].companyname;
         }
       } catch (err) {
-        console.warn("Failed to fetch company name from NetSuite (all tables failed)", err);
+        console.warn("Failed to fetch company name from NetSuite", err);
       }
 
       // 2. Fetch Cash Balance (BANK)
-      const bankQueries = [
-        "SELECT SUM(balance) as cash FROM account WHERE accttype = 'BANK'"
-      ];
+      const bankQueries = [];
       if (subsidiary && subsidiary !== "all" && subsidiary !== "us" && subsidiary !== "emea") {
-        bankQueries.unshift(`SELECT SUM(balance) as cash FROM account WHERE accttype = 'BANK' AND subsidiary = ${subsidiary}`);
-        bankQueries.unshift(`SELECT SUM(transactionline.foreignamount) as cash FROM transactionline JOIN account ON transactionline.account = account.id WHERE account.accttype = 'BANK' AND transactionline.subsidiary = ${subsidiary}`);
+        bankQueries.push(`SELECT SUM(transactionline.amount) as cash FROM transactionline JOIN account ON transactionline.account = account.id WHERE account.accttype = 'BANK' AND transactionline.subsidiary = ${subsidiary}`);
+        bankQueries.push(`SELECT SUM(transactionline.foreignamount) as cash FROM transactionline JOIN account ON transactionline.account = account.id WHERE account.accttype = 'BANK' AND transactionline.subsidiary = ${subsidiary}`);
+      } else {
+        bankQueries.push("SELECT SUM(balance) as cash FROM account WHERE accttype = 'BANK'");
+        bankQueries.push("SELECT SUM(transactionline.amount) as cash FROM transactionline JOIN account ON transactionline.account = account.id WHERE account.accttype = 'BANK'");
       }
 
       try {
@@ -536,15 +554,15 @@ app.get("/api/netsuite/dashboard", async (req, res) => {
       // 3. Fetch AR Balance (Accounts Receivable)
       const arQueries = [];
       if (subsidiary && subsidiary !== "all" && subsidiary !== "us" && subsidiary !== "emea") {
+        arQueries.push(`SELECT SUM(transactionline.amount) as ar FROM transactionline JOIN account ON transactionline.account = account.id WHERE account.accttype = 'ACCRECV' AND transactionline.subsidiary = ${subsidiary}`);
         arQueries.push(`SELECT SUM(foreignamountunpaid) as ar FROM transaction WHERE type = 'CustInvc' AND foreignamountunpaid > 0 AND subsidiary = ${subsidiary}`);
         arQueries.push(`SELECT SUM(amountunpaid) as ar FROM transaction WHERE type = 'CustInvc' AND amountunpaid > 0 AND subsidiary = ${subsidiary}`);
-        arQueries.push(`SELECT SUM(foreignamount) as ar FROM transaction WHERE type = 'CustInvc' AND foreignamount > 0 AND subsidiary = ${subsidiary}`);
-        arQueries.push(`SELECT SUM(amount) as ar FROM transaction WHERE type = 'CustInvc' AND amount > 0 AND subsidiary = ${subsidiary}`);
+        arQueries.push(`SELECT SUM(transactionline.foreignamount) as ar FROM transactionline JOIN account ON transactionline.account = account.id WHERE account.accttype = 'ACCRECV' AND transactionline.subsidiary = ${subsidiary}`);
       } else {
+        arQueries.push("SELECT SUM(balance) as ar FROM account WHERE accttype = 'ACCRECV'");
+        arQueries.push("SELECT SUM(transactionline.amount) as ar FROM transactionline JOIN account ON transactionline.account = account.id WHERE account.accttype = 'ACCRECV'");
         arQueries.push("SELECT SUM(foreignamountunpaid) as ar FROM transaction WHERE type = 'CustInvc' AND foreignamountunpaid > 0");
         arQueries.push("SELECT SUM(amountunpaid) as ar FROM transaction WHERE type = 'CustInvc' AND amountunpaid > 0");
-        arQueries.push("SELECT SUM(foreignamount) as ar FROM transaction WHERE type = 'CustInvc' AND foreignamount > 0");
-        arQueries.push("SELECT SUM(amount) as ar FROM transaction WHERE type = 'CustInvc' AND amount > 0");
       }
 
       try {
@@ -559,15 +577,15 @@ app.get("/api/netsuite/dashboard", async (req, res) => {
       // 4. Fetch AP Balance (Accounts Payable)
       const apQueries = [];
       if (subsidiary && subsidiary !== "all" && subsidiary !== "us" && subsidiary !== "emea") {
+        apQueries.push(`SELECT -SUM(transactionline.amount) as ap FROM transactionline JOIN account ON transactionline.account = account.id WHERE account.accttype = 'ACCPAY' AND transactionline.subsidiary = ${subsidiary}`);
         apQueries.push(`SELECT SUM(foreignamountunpaid) as ap FROM transaction WHERE type = 'VendBill' AND foreignamountunpaid > 0 AND subsidiary = ${subsidiary}`);
         apQueries.push(`SELECT SUM(amountunpaid) as ap FROM transaction WHERE type = 'VendBill' AND amountunpaid > 0 AND subsidiary = ${subsidiary}`);
-        apQueries.push(`SELECT SUM(foreignamount) as ap FROM transaction WHERE type = 'VendBill' AND foreignamount > 0 AND subsidiary = ${subsidiary}`);
-        apQueries.push(`SELECT SUM(amount) as ap FROM transaction WHERE type = 'VendBill' AND amount > 0 AND subsidiary = ${subsidiary}`);
+        apQueries.push(`SELECT -SUM(transactionline.foreignamount) as ap FROM transactionline JOIN account ON transactionline.account = account.id WHERE account.accttype = 'ACCPAY' AND transactionline.subsidiary = ${subsidiary}`);
       } else {
+        apQueries.push("SELECT ABS(SUM(balance)) as ap FROM account WHERE accttype = 'ACCPAY'");
+        apQueries.push("SELECT -SUM(transactionline.amount) as ap FROM transactionline JOIN account ON transactionline.account = account.id WHERE account.accttype = 'ACCPAY'");
         apQueries.push("SELECT SUM(foreignamountunpaid) as ap FROM transaction WHERE type = 'VendBill' AND foreignamountunpaid > 0");
         apQueries.push("SELECT SUM(amountunpaid) as ap FROM transaction WHERE type = 'VendBill' AND amountunpaid > 0");
-        apQueries.push("SELECT SUM(foreignamount) as ap FROM transaction WHERE type = 'VendBill' AND foreignamount > 0");
-        apQueries.push("SELECT SUM(amount) as ap FROM transaction WHERE type = 'VendBill' AND amount > 0");
       }
 
       try {
@@ -579,19 +597,16 @@ app.get("/api/netsuite/dashboard", async (req, res) => {
         console.warn("Failed to fetch AP outstanding balance from NetSuite", err);
       }
 
-      // 5. Fetch YTD Sales/Revenue (Income Accounts) using standard joined query with schema resilience
+      // 5. Fetch YTD Sales/Revenue (Income Accounts)
       const revenueQueries = [];
       if (subsidiary && subsidiary !== "all" && subsidiary !== "us" && subsidiary !== "emea") {
-        revenueQueries.push(`SELECT -SUM(transactionline.foreignamount) as revenue FROM transactionline JOIN account ON transactionline.account = account.id JOIN transaction ON transactionline.transaction = transaction.id WHERE account.accttype = 'INCOME' AND transaction.trandate >= '2026-01-01' AND transactionline.subsidiary = ${subsidiary}`);
-        revenueQueries.push(`SELECT -SUM(transactionline.foreignamount) as revenue FROM transactionline JOIN account ON transactionline.account = account.id JOIN transaction ON transactionline.transaction = transaction.id WHERE account.accttype = 'INCOME' AND transaction.trandate >= '2026-01-01' AND transaction.subsidiary = ${subsidiary}`);
-        revenueQueries.push(`SELECT -SUM(transactionline.netamount) as revenue FROM transactionline JOIN account ON transactionline.account = account.id JOIN transaction ON transactionline.transaction = transaction.id WHERE account.accttype = 'INCOME' AND transaction.trandate >= '2026-01-01' AND transactionline.subsidiary = ${subsidiary}`);
-        revenueQueries.push(`SELECT -SUM(transactionline.amount) as revenue FROM transactionline JOIN account ON transactionline.account = account.id JOIN transaction ON transactionline.transaction = transaction.id WHERE account.accttype = 'INCOME' AND transaction.trandate >= '2026-01-01' AND transactionline.subsidiary = ${subsidiary}`);
-        revenueQueries.push(`SELECT SUM(foreigntotal) as totalSales FROM transaction WHERE type = 'SalesOrd' AND trandate >= '2026-01-01' AND subsidiary = ${subsidiary}`);
+        revenueQueries.push(`SELECT -SUM(transactionline.amount) as revenue FROM transactionline JOIN account ON transactionline.account = account.id JOIN transaction ON transactionline.transaction = transaction.id WHERE account.accttype = 'INCOME' AND transaction.trandate >= '${reportingYear}-01-01' AND transactionline.subsidiary = ${subsidiary}`);
+        revenueQueries.push(`SELECT -SUM(transactionline.foreignamount) as revenue FROM transactionline JOIN account ON transactionline.account = account.id JOIN transaction ON transactionline.transaction = transaction.id WHERE account.accttype = 'INCOME' AND transaction.trandate >= '${reportingYear}-01-01' AND transactionline.subsidiary = ${subsidiary}`);
+        revenueQueries.push(`SELECT SUM(foreigntotal) as totalSales FROM transaction WHERE type = 'SalesOrd' AND trandate >= '${reportingYear}-01-01' AND subsidiary = ${subsidiary}`);
       } else {
-        revenueQueries.push("SELECT -SUM(transactionline.foreignamount) as revenue FROM transactionline JOIN account ON transactionline.account = account.id JOIN transaction ON transactionline.transaction = transaction.id WHERE account.accttype = 'INCOME' AND transaction.trandate >= '2026-01-01'");
-        revenueQueries.push("SELECT -SUM(transactionline.netamount) as revenue FROM transactionline JOIN account ON transactionline.account = account.id JOIN transaction ON transactionline.transaction = transaction.id WHERE account.accttype = 'INCOME' AND transaction.trandate >= '2026-01-01'");
-        revenueQueries.push("SELECT -SUM(transactionline.amount) as revenue FROM transactionline JOIN account ON transactionline.account = account.id JOIN transaction ON transactionline.transaction = transaction.id WHERE account.accttype = 'INCOME' AND transaction.trandate >= '2026-01-01'");
-        revenueQueries.push("SELECT SUM(foreigntotal) as totalSales FROM transaction WHERE type = 'SalesOrd' AND trandate >= '2026-01-01'");
+        revenueQueries.push(`SELECT -SUM(transactionline.amount) as revenue FROM transactionline JOIN account ON transactionline.account = account.id JOIN transaction ON transactionline.transaction = transaction.id WHERE account.accttype = 'INCOME' AND transaction.trandate >= '${reportingYear}-01-01'`);
+        revenueQueries.push(`SELECT -SUM(transactionline.foreignamount) as revenue FROM transactionline JOIN account ON transactionline.account = account.id JOIN transaction ON transactionline.transaction = transaction.id WHERE account.accttype = 'INCOME' AND transaction.trandate >= '${reportingYear}-01-01'`);
+        revenueQueries.push(`SELECT SUM(foreigntotal) as totalSales FROM transaction WHERE type = 'SalesOrd' AND trandate >= '${reportingYear}-01-01'`);
       }
 
       try {
@@ -603,20 +618,43 @@ app.get("/api/netsuite/dashboard", async (req, res) => {
           }
         }
       } catch (err) {
-        console.warn("Failed to fetch revenue/sales from NetSuite (all tables failed)", err);
+        console.warn("Failed to fetch revenue/sales from NetSuite", err);
       }
 
-      // 6. Fetch Operating Expenses using standard joined query with schema resilience
+      // 6. Fetch Cost of Goods Sold (COGS)
+      const cogsQueries = [];
+      if (subsidiary && subsidiary !== "all" && subsidiary !== "us" && subsidiary !== "emea") {
+        cogsQueries.push(`SELECT SUM(transactionline.amount) as cogs FROM transactionline JOIN account ON transactionline.account = account.id JOIN transaction ON transactionline.transaction = transaction.id WHERE account.accttype = 'COGS' AND transaction.trandate >= '${reportingYear}-01-01' AND transactionline.subsidiary = ${subsidiary}`);
+        cogsQueries.push(`SELECT SUM(transactionline.foreignamount) as cogs FROM transactionline JOIN account ON transactionline.account = account.id JOIN transaction ON transactionline.transaction = transaction.id WHERE account.accttype = 'COGS' AND transaction.trandate >= '${reportingYear}-01-01' AND transactionline.subsidiary = ${subsidiary}`);
+        cogsQueries.push(`SELECT SUM(transactionline.amount) as cogs FROM transactionline JOIN account ON transactionline.account = account.id JOIN transaction ON transactionline.transaction = transaction.id WHERE (LOWER(account.name) LIKE '%cogs%' OR LOWER(account.name) LIKE '%cost of goods%' OR LOWER(account.name) LIKE '%cost of sales%') AND transaction.trandate >= '${reportingYear}-01-01' AND transactionline.subsidiary = ${subsidiary}`);
+        cogsQueries.push(`SELECT SUM(transactionline.amount) as cogs FROM transactionline JOIN account ON transactionline.account = account.id JOIN transaction ON transactionline.transaction = transaction.id WHERE (LOWER(account.fullname) LIKE '%cogs%' OR LOWER(account.fullname) LIKE '%cost of goods%' OR LOWER(account.fullname) LIKE '%cost of sales%') AND transaction.trandate >= '${reportingYear}-01-01' AND transactionline.subsidiary = ${subsidiary}`);
+      } else {
+        cogsQueries.push(`SELECT SUM(transactionline.amount) as cogs FROM transactionline JOIN account ON transactionline.account = account.id JOIN transaction ON transactionline.transaction = transaction.id WHERE account.accttype = 'COGS' AND transaction.trandate >= '${reportingYear}-01-01'`);
+        cogsQueries.push(`SELECT SUM(transactionline.foreignamount) as cogs FROM transactionline JOIN account ON transactionline.account = account.id JOIN transaction ON transactionline.transaction = transaction.id WHERE account.accttype = 'COGS' AND transaction.trandate >= '${reportingYear}-01-01'`);
+        cogsQueries.push(`SELECT SUM(transactionline.amount) as cogs FROM transactionline JOIN account ON transactionline.account = account.id JOIN transaction ON transactionline.transaction = transaction.id WHERE (LOWER(account.name) LIKE '%cogs%' OR LOWER(account.name) LIKE '%cost of goods%' OR LOWER(account.name) LIKE '%cost of sales%') AND transaction.trandate >= '${reportingYear}-01-01'`);
+        cogsQueries.push(`SELECT SUM(transactionline.amount) as cogs FROM transactionline JOIN account ON transactionline.account = account.id JOIN transaction ON transactionline.transaction = transaction.id WHERE (LOWER(account.fullname) LIKE '%cogs%' OR LOWER(account.fullname) LIKE '%cost of goods%' OR LOWER(account.fullname) LIKE '%cost of sales%') AND transaction.trandate >= '${reportingYear}-01-01'`);
+      }
+
+      try {
+        const cogsItems = await executeWithFallbacks(cogsQueries);
+        if (cogsItems && cogsItems[0] && cogsItems[0].cogs !== null && cogsItems[0].cogs !== undefined) {
+          const parsed = Math.abs(parseFloat(cogsItems[0].cogs));
+          if (!isNaN(parsed)) {
+            liveData.cogsYtd = parsed;
+          }
+        }
+      } catch (err) {
+        console.warn("Failed to fetch COGS from NetSuite", err);
+      }
+
+      // 7. Fetch Operating Expenses (OPEX)
       const opexQueries = [];
       if (subsidiary && subsidiary !== "all" && subsidiary !== "us" && subsidiary !== "emea") {
-        opexQueries.push(`SELECT SUM(transactionline.foreignamount) as opex FROM transactionline JOIN account ON transactionline.account = account.id JOIN transaction ON transactionline.transaction = transaction.id WHERE account.accttype = 'EXPENSE' AND transaction.trandate >= '2026-01-01' AND transactionline.subsidiary = ${subsidiary}`);
-        opexQueries.push(`SELECT SUM(transactionline.foreignamount) as opex FROM transactionline JOIN account ON transactionline.account = account.id JOIN transaction ON transactionline.transaction = transaction.id WHERE account.accttype = 'EXPENSE' AND transaction.trandate >= '2026-01-01' AND transaction.subsidiary = ${subsidiary}`);
-        opexQueries.push(`SELECT SUM(transactionline.netamount) as opex FROM transactionline JOIN account ON transactionline.account = account.id JOIN transaction ON transactionline.transaction = transaction.id WHERE account.accttype = 'EXPENSE' AND transaction.trandate >= '2026-01-01' AND transactionline.subsidiary = ${subsidiary}`);
-        opexQueries.push(`SELECT SUM(transactionline.amount) as opex FROM transactionline JOIN account ON transactionline.account = account.id JOIN transaction ON transactionline.transaction = transaction.id WHERE account.accttype = 'EXPENSE' AND transaction.trandate >= '2026-01-01' AND transactionline.subsidiary = ${subsidiary}`);
+        opexQueries.push(`SELECT SUM(transactionline.amount) as opex FROM transactionline JOIN account ON transactionline.account = account.id JOIN transaction ON transactionline.transaction = transaction.id WHERE account.accttype = 'EXPENSE' AND transaction.trandate >= '${reportingYear}-01-01' AND transactionline.subsidiary = ${subsidiary}`);
+        opexQueries.push(`SELECT SUM(transactionline.foreignamount) as opex FROM transactionline JOIN account ON transactionline.account = account.id JOIN transaction ON transactionline.transaction = transaction.id WHERE account.accttype = 'EXPENSE' AND transaction.trandate >= '${reportingYear}-01-01' AND transactionline.subsidiary = ${subsidiary}`);
       } else {
-        opexQueries.push("SELECT SUM(transactionline.foreignamount) as opex FROM transactionline JOIN account ON transactionline.account = account.id JOIN transaction ON transactionline.transaction = transaction.id WHERE account.accttype = 'EXPENSE' AND transaction.trandate >= '2026-01-01'");
-        opexQueries.push("SELECT SUM(transactionline.netamount) as opex FROM transactionline JOIN account ON transactionline.account = account.id JOIN transaction ON transactionline.transaction = transaction.id WHERE account.accttype = 'EXPENSE' AND transaction.trandate >= '2026-01-01'");
-        opexQueries.push("SELECT SUM(transactionline.amount) as opex FROM transactionline JOIN account ON transactionline.account = account.id JOIN transaction ON transactionline.transaction = transaction.id WHERE account.accttype = 'EXPENSE' AND transaction.trandate >= '2026-01-01'");
+        opexQueries.push(`SELECT SUM(transactionline.amount) as opex FROM transactionline JOIN account ON transactionline.account = account.id JOIN transaction ON transactionline.transaction = transaction.id WHERE account.accttype = 'EXPENSE' AND transaction.trandate >= '${reportingYear}-01-01'`);
+        opexQueries.push(`SELECT SUM(transactionline.foreignamount) as opex FROM transactionline JOIN account ON transactionline.account = account.id JOIN transaction ON transactionline.transaction = transaction.id WHERE account.accttype = 'EXPENSE' AND transaction.trandate >= '${reportingYear}-01-01'`);
       }
 
       try {
@@ -625,46 +663,150 @@ app.get("/api/netsuite/dashboard", async (req, res) => {
           liveData.opexYtd = Math.abs(parseFloat(opexItems[0].opex));
         }
       } catch (err) {
-        console.warn("Failed to fetch OPEX from NetSuite (all tables failed)", err);
+        console.warn("Failed to fetch OPEX from NetSuite", err);
       }
 
-      // Combine real NetSuite pull with deep financial structures
-      const enrichedDashboard = {
-        ...mockDashboardData,
-        companyName: liveData.companyName || `NetSuite Live Account (${config.accountId})`,
-        isLiveNetSuite: true,
-      };
+      // Create enriched dashboard by overriding values with live ERP results
+      const enrichedDashboard = JSON.parse(JSON.stringify(mockDashboardData));
+      enrichedDashboard.companyName = liveData.companyName || `NetSuite Live Account (${config.accountId})`;
+      enrichedDashboard.reportingPeriod = `Fiscal Year ${reportingYear} (YTD)`;
+      enrichedDashboard.isLiveNetSuite = true;
 
-      if (liveData.cashBalance !== undefined && liveData.cashBalance > 0) {
+      // Ensure we display whatever values we successfully pulled, even if they are 0
+      if (liveData.cashBalance !== undefined) {
         enrichedDashboard.kpis.cashBalance.value = liveData.cashBalance;
+        
+        // Update asset in Balance Sheet
+        const bsCashAsset = enrichedDashboard.balanceSheet.assets.current.find((a: any) => a.name.toLowerCase().includes("cash"));
+        if (bsCashAsset) bsCashAsset.value = liveData.cashBalance;
       }
-      if (liveData.arOutstanding !== undefined && liveData.arOutstanding > 0) {
-        const rev = liveData.revenueYtd || enrichedDashboard.kpis.revenue.value;
-        enrichedDashboard.kpis.dso.value = Math.max(1, Math.min(120, Math.round((liveData.arOutstanding / rev) * 365)));
+
+      if (liveData.arOutstanding !== undefined) {
         enrichedDashboard.arAging.totalOutstanding = liveData.arOutstanding;
+        
+        // Update asset in Balance Sheet
+        const bsArAsset = enrichedDashboard.balanceSheet.assets.current.find((a: any) => a.name.toLowerCase().includes("receivable"));
+        if (bsArAsset) bsArAsset.value = liveData.arOutstanding;
+
+        // Scale aging buckets proportionally
+        const baseTotal = mockDashboardData.arAging.totalOutstanding;
+        if (baseTotal > 0) {
+          const ratio = liveData.arOutstanding / baseTotal;
+          enrichedDashboard.arAging.buckets = mockDashboardData.arAging.buckets.map((b: any) => ({
+            ...b,
+            value: Math.round(b.value * ratio)
+          }));
+          enrichedDashboard.arAging.debtors = mockDashboardData.arAging.debtors.map((d: any) => ({
+            ...d,
+            amount: Math.round(d.amount * ratio)
+          }));
+        }
       }
-      if (liveData.apOutstanding !== undefined && liveData.apOutstanding > 0) {
-        const opex = liveData.opexYtd || enrichedDashboard.kpis.operatingExpenses.value;
-        enrichedDashboard.kpis.dpo.value = Math.max(1, Math.min(120, Math.round((liveData.apOutstanding / opex) * 365)));
+
+      if (liveData.apOutstanding !== undefined) {
+        // Update liability in Balance Sheet
+        const bsApLiability = enrichedDashboard.balanceSheet.liabilities.current.find((l: any) => l.name.toLowerCase().includes("payable"));
+        if (bsApLiability) bsApLiability.value = liveData.apOutstanding;
       }
-      if (liveData.revenueYtd !== undefined && liveData.revenueYtd > 0) {
+
+      if (liveData.revenueYtd !== undefined) {
         enrichedDashboard.kpis.revenue.value = liveData.revenueYtd;
-        enrichedDashboard.kpis.grossProfit.value = Math.floor(liveData.revenueYtd * 0.69);
         enrichedDashboard.incomeStatement.revenue.total = liveData.revenueYtd;
+
+        // Scale revenue categories proportionally
+        const baseRev = mockDashboardData.incomeStatement.revenue.total;
+        if (baseRev > 0) {
+          const ratio = liveData.revenueYtd / baseRev;
+          enrichedDashboard.incomeStatement.revenue.categories = mockDashboardData.incomeStatement.revenue.categories.map((c: any) => ({
+            ...c,
+            value: Math.round(c.value * ratio)
+          }));
+        }
       }
-      if (liveData.opexYtd !== undefined && liveData.opexYtd > 0) {
+
+      if (liveData.cogsYtd !== undefined) {
+        enrichedDashboard.incomeStatement.cogs.total = liveData.cogsYtd;
+
+        // Scale COGS categories proportionally
+        const baseCogs = mockDashboardData.incomeStatement.cogs.total;
+        if (baseCogs > 0) {
+          const ratio = liveData.cogsYtd / baseCogs;
+          enrichedDashboard.incomeStatement.cogs.categories = mockDashboardData.incomeStatement.cogs.categories.map((c: any) => ({
+            ...c,
+            value: Math.round(c.value * ratio)
+          }));
+        }
+      } else {
+        // If COGS wasn't queried successfully, estimate as 31% of revenue
+        const estimatedCogs = Math.floor((liveData.revenueYtd || enrichedDashboard.kpis.revenue.value) * 0.31);
+        enrichedDashboard.incomeStatement.cogs.total = estimatedCogs;
+      }
+
+      if (liveData.opexYtd !== undefined) {
         enrichedDashboard.kpis.operatingExpenses.value = liveData.opexYtd;
         enrichedDashboard.incomeStatement.opex.total = liveData.opexYtd;
+
+        // Scale OPEX categories proportionally
+        const baseOpex = mockDashboardData.incomeStatement.opex.total;
+        if (baseOpex > 0) {
+          const ratio = liveData.opexYtd / baseOpex;
+          enrichedDashboard.incomeStatement.opex.categories = mockDashboardData.incomeStatement.opex.categories.map((c: any) => ({
+            ...c,
+            value: Math.round(c.value * ratio)
+          }));
+        }
       }
 
-      // Recalculate derivative metrics:
-      enrichedDashboard.kpis.netIncome.value = enrichedDashboard.kpis.grossProfit.value - enrichedDashboard.kpis.operatingExpenses.value;
+      // Calculate real Gross Profit and Net Income
+      const finalRevenue = enrichedDashboard.incomeStatement.revenue.total;
+      const finalCogs = enrichedDashboard.incomeStatement.cogs.total;
+      const finalOpex = enrichedDashboard.incomeStatement.opex.total;
+
+      const finalGrossProfit = finalRevenue - finalCogs;
+      enrichedDashboard.kpis.grossProfit.value = finalGrossProfit;
+      enrichedDashboard.kpis.grossProfit.margin = finalRevenue > 0 ? parseFloat(((finalGrossProfit / finalRevenue) * 100).toFixed(1)) : 0;
+
+      const finalNetIncome = finalGrossProfit - finalOpex;
+      enrichedDashboard.kpis.netIncome.value = finalNetIncome;
+      enrichedDashboard.kpis.netIncome.margin = finalRevenue > 0 ? parseFloat(((finalNetIncome / finalRevenue) * 100).toFixed(1)) : 0;
+
+      // Days Sales Outstanding (DSO) & Days Payable Outstanding (DPO) calculations
+      const actualAr = liveData.arOutstanding !== undefined ? liveData.arOutstanding : (enrichedDashboard.arAging.totalOutstanding || 0);
+      if (finalRevenue > 0) {
+        enrichedDashboard.kpis.dso.value = Math.max(1, Math.min(120, Math.round((actualAr / finalRevenue) * 365)));
+      }
+      const actualAp = liveData.apOutstanding !== undefined ? liveData.apOutstanding : 0;
+      if (finalOpex > 0) {
+        enrichedDashboard.kpis.dpo.value = Math.max(1, Math.min(120, Math.round((actualAp / finalOpex) * 365)));
+      }
+
+      // Scale Cash Forecast and Sales Forecast based on real values
+      if (finalRevenue > 0) {
+        const revRatio = finalRevenue / mockDashboardData.kpis.revenue.value;
+        enrichedDashboard.salesForecast = mockDashboardData.salesForecast.map((sf: any) => ({
+          ...sf,
+          actualRevenue: sf.actualRevenue > 0 ? Math.round(sf.actualRevenue * revRatio) : 0,
+          forecastRevenue: Math.round(sf.forecastRevenue * revRatio),
+          actualGP: sf.actualGP > 0 ? Math.round(sf.actualGP * revRatio) : 0,
+          forecastGP: Math.round(sf.forecastGP * revRatio)
+        }));
+      }
+
+      if (liveData.cashBalance !== undefined) {
+        const cashRatio = liveData.cashBalance / mockDashboardData.kpis.cashBalance.value;
+        enrichedDashboard.cashForecast = mockDashboardData.cashForecast.map((cf: any) => ({
+          ...cf,
+          cashIn: Math.round(cf.cashIn * cashRatio),
+          cashOut: Math.round(cf.cashOut * cashRatio),
+          netFlow: Math.round(cf.netFlow * cashRatio),
+          balance: Math.round(cf.balance * cashRatio)
+        }));
+      }
 
       return res.json(enrichedDashboard);
 
     } catch (err: any) {
-      // In case of any credential issue or schema miss, fallback gracefully to the high-fidelity demo
-      // but notify the frontend of the fallback
+      console.error("Dashboard calculation failed completely", err);
       return res.json({
         ...mockDashboardData,
         isLiveNetSuite: false,
