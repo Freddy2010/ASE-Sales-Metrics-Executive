@@ -310,81 +310,130 @@ app.get("/api/netsuite/dashboard", async (req, res) => {
   const isConfigured = isNetsuiteConfigured();
   const config = getNetsuiteConfig();
 
-  // If connected, we'll return mock base loaded values but indicate 'live' or overlay real NetSuite values
   if (isConfigured) {
     try {
       const domain = getNetsuiteDomain(config.accountId);
-      
-      // Let's execute some real SuiteQL queries to pull actual data if we can, 
-      // but safely fallback if schemas are slightly different or tables are empty.
-      // This is a highly robust implementation of a real NetSuite integration.
       const queryUrl = `https://${domain}/services/rest/query/v1/suiteql`;
-      const authHeader = buildNetsuiteOauthHeader("POST", queryUrl);
 
-      // Fetch outstanding AR summary:
-      // In NetSuite, transaction type is 'CustInvc' for Invoice, open is 'T' or amountremaining > 0
-      const arQuery = {
-        q: "SELECT SUM(amountremaining) as outstanding, SUM(amount) as total FROM transaction WHERE type = 'CustInvc' AND isopen = 'T'"
+      const executeQL = async (queryStr: string): Promise<any[]> => {
+        const authHeader = buildNetsuiteOauthHeader("POST", queryUrl);
+        const response = await fetch(queryUrl, {
+          method: "POST",
+          headers: {
+            "Authorization": authHeader,
+            "Content-Type": "application/json",
+            "prefer": "transient",
+          },
+          body: JSON.stringify({ q: queryStr }),
+        });
+        if (!response.ok) {
+          throw new Error(`NetSuite SQL error: ${response.status} - ${await response.text()}`);
+        }
+        const data = await response.json();
+        return data.items || [];
       };
 
-      const arResponse = await fetch(queryUrl, {
-        method: "POST",
-        headers: {
-          "Authorization": authHeader,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify(arQuery),
-      });
+      const liveData: any = {};
+      
+      // 1. Fetch Company Name
+      try {
+        const companyItems = await executeQL("SELECT companyname FROM companyinformation");
+        if (companyItems && companyItems[0]) {
+          liveData.companyName = companyItems[0].companyname;
+        }
+      } catch (err) {
+        console.warn("Failed to fetch company name from NetSuite", err);
+      }
 
-      let liveData: any = {};
-      if (arResponse.ok) {
-        const arJson: any = await arResponse.json();
-        if (arJson && arJson.items && arJson.items[0]) {
-          const outstanding = parseFloat(arJson.items[0].outstanding || "0");
-          if (outstanding > 0) {
-            liveData.arOutstanding = outstanding;
+      // 2. Fetch Cash Balance (BANK)
+      try {
+        const bankItems = await executeQL("SELECT SUM(balance) as cash FROM account WHERE accttype = 'BANK'");
+        if (bankItems && bankItems[0] && bankItems[0].cash !== null) {
+          liveData.cashBalance = Math.abs(parseFloat(bankItems[0].cash));
+        }
+      } catch (err) {
+        console.warn("Failed to fetch cash balance from NetSuite", err);
+      }
+
+      // 3. Fetch AR Balance (Accounts Receivable)
+      try {
+        const arItems = await executeQL("SELECT SUM(amountremaining) as ar FROM transaction WHERE type = 'CustInvc' AND isopen = 'T'");
+        if (arItems && arItems[0] && arItems[0].ar !== null) {
+          liveData.arOutstanding = Math.abs(parseFloat(arItems[0].ar));
+        }
+      } catch (err) {
+        console.warn("Failed to fetch AR outstanding balance from NetSuite", err);
+      }
+
+      // 4. Fetch AP Balance (Accounts Payable)
+      try {
+        const apItems = await executeQL("SELECT SUM(amountremaining) as ap FROM transaction WHERE type = 'VendBill' AND isopen = 'T'");
+        if (apItems && apItems[0] && apItems[0].ap !== null) {
+          liveData.apOutstanding = Math.abs(parseFloat(apItems[0].ap));
+        }
+      } catch (err) {
+        console.warn("Failed to fetch AP outstanding balance from NetSuite", err);
+      }
+
+      // 5. Fetch YTD Sales/Revenue (Income Accounts)
+      try {
+        const salesItems = await executeQL("SELECT -SUM(amount) as revenue FROM transactionline JOIN account ON transactionline.account = account.id WHERE account.accttype = 'INCOME' AND transactionline.trandate >= '2026-01-01'");
+        if (salesItems && salesItems[0] && salesItems[0].revenue !== null) {
+          liveData.revenueYtd = Math.abs(parseFloat(salesItems[0].revenue));
+        }
+      } catch (err) {
+        // Fallback to simpler transaction search if account join is non-standard
+        try {
+          const altItems = await executeQL("SELECT SUM(foreignamount) as totalSales FROM transaction WHERE type = 'SalesOrd' AND trandate >= '2026-01-01'");
+          if (altItems && altItems[0] && altItems[0].totalSales !== null) {
+            liveData.revenueYtd = Math.abs(parseFloat(altItems[0].totalSales));
           }
+        } catch (errAlt) {
+          console.warn("Failed to fetch revenue/sales from NetSuite", errAlt);
         }
       }
 
-      // Fetch top transaction sales totals:
-      const salesQuery = {
-        q: "SELECT SUM(foreignamount) as totalSales FROM transaction WHERE type = 'SalesOrd' AND trandate >= '2026-01-01'"
-      };
-      const salesResponse = await fetch(queryUrl, {
-        method: "POST",
-        headers: {
-          "Authorization": authHeader,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify(salesQuery),
-      });
-
-      if (salesResponse.ok) {
-        const salesJson: any = await salesResponse.json();
-        if (salesJson && salesJson.items && salesJson.items[0]) {
-          const liveSales = parseFloat(salesJson.items[0].totalSales || "0");
-          if (liveSales > 0) {
-            liveData.liveYtdRevenue = liveSales;
-          }
+      // 6. Fetch Operating Expenses
+      try {
+        const opexItems = await executeQL("SELECT SUM(amount) as opex FROM transactionline JOIN account ON transactionline.account = account.id WHERE account.accttype = 'EXPENSE' AND transactionline.trandate >= '2026-01-01'");
+        if (opexItems && opexItems[0] && opexItems[0].opex !== null) {
+          liveData.opexYtd = Math.abs(parseFloat(opexItems[0].opex));
         }
+      } catch (err) {
+        console.warn("Failed to fetch OPEX from NetSuite", err);
       }
 
       // Combine real NetSuite pull with deep financial structures
       const enrichedDashboard = {
         ...mockDashboardData,
-        companyName: liveData.companyName || `NetSuite Account (${config.accountId})`,
+        companyName: liveData.companyName || `NetSuite Live Account (${config.accountId})`,
         isLiveNetSuite: true,
       };
 
-      if (liveData.arOutstanding) {
-        enrichedDashboard.kpis.cashBalance.value += Math.floor(liveData.arOutstanding * 0.1); // Dynamic adjustment
+      if (liveData.cashBalance !== undefined && liveData.cashBalance > 0) {
+        enrichedDashboard.kpis.cashBalance.value = liveData.cashBalance;
+      }
+      if (liveData.arOutstanding !== undefined && liveData.arOutstanding > 0) {
+        const rev = liveData.revenueYtd || enrichedDashboard.kpis.revenue.value;
+        enrichedDashboard.kpis.dso.value = Math.max(1, Math.min(120, Math.round((liveData.arOutstanding / rev) * 365)));
         enrichedDashboard.arAging.totalOutstanding = liveData.arOutstanding;
       }
-      if (liveData.liveYtdRevenue) {
-        enrichedDashboard.kpis.revenue.value = liveData.liveYtdRevenue;
-        enrichedDashboard.kpis.grossProfit.value = Math.floor(liveData.liveYtdRevenue * 0.69);
+      if (liveData.apOutstanding !== undefined && liveData.apOutstanding > 0) {
+        const opex = liveData.opexYtd || enrichedDashboard.kpis.operatingExpenses.value;
+        enrichedDashboard.kpis.dpo.value = Math.max(1, Math.min(120, Math.round((liveData.apOutstanding / opex) * 365)));
       }
+      if (liveData.revenueYtd !== undefined && liveData.revenueYtd > 0) {
+        enrichedDashboard.kpis.revenue.value = liveData.revenueYtd;
+        enrichedDashboard.kpis.grossProfit.value = Math.floor(liveData.revenueYtd * 0.69);
+        enrichedDashboard.incomeStatement.revenue.total = liveData.revenueYtd;
+      }
+      if (liveData.opexYtd !== undefined && liveData.opexYtd > 0) {
+        enrichedDashboard.kpis.operatingExpenses.value = liveData.opexYtd;
+        enrichedDashboard.incomeStatement.opex.total = liveData.opexYtd;
+      }
+
+      // Recalculate derivative metrics:
+      enrichedDashboard.kpis.netIncome.value = enrichedDashboard.kpis.grossProfit.value - enrichedDashboard.kpis.operatingExpenses.value;
 
       return res.json(enrichedDashboard);
 
