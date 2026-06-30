@@ -90,7 +90,7 @@ export default function NetsuiteSavedSearchImporter({ onImportSuccess, onClose }
       }, 1500);
 
     } catch (err: any) {
-      setError(err.message || "Failed to parse data. Make sure a valid Gemini API Key is configured in your Settings Secrets.");
+      setError(err.message || "Failed to parse data. Make sure a valid Claude API Key is configured in your Settings Secrets.");
     } finally {
       setLoading(false);
     }
@@ -134,7 +134,7 @@ export default function NetsuiteSavedSearchImporter({ onImportSuccess, onClose }
             <Sparkles className="w-4 h-4 text-blue-600 mt-0.5 shrink-0" />
             <div>
               <p className="font-bold mb-1">Direct ERP Pipeline Conversion</p>
-              Paste any transactional dataset, accounting ledger, or client-aging tables below. The integrated **CFO Gemini Engine** will automatically normalize schemas, calculate ratios, map statement trees (GAAP/IFRS), and construct a balanced interactive workspace in real-time.
+              Paste any transactional dataset, accounting ledger, or client-aging tables below. The integrated **CFO Claude Engine** will automatically normalize schemas, calculate ratios, map statement trees (GAAP/IFRS), and construct a balanced interactive workspace in real-time.
             </div>
           </div>
 
