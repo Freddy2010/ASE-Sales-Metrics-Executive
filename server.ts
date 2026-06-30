@@ -300,6 +300,7 @@ const mockDashboardData = {
   incomeStatement: {
     revenue: {
       total: 14250000,
+      change: 12.4,
       categories: [
         { name: "Product Subscriptions (SaaS)", value: 8950000, change: 18.2 },
         { name: "Professional Services", value: 3120000, change: 4.5 },
@@ -309,6 +310,7 @@ const mockDashboardData = {
     },
     cogs: {
       total: 4417500,
+      change: 4.2,
       categories: [
         { name: "Hosting & Cloud Infrastructure", value: 1850000, change: 8.5 },
         { name: "Professional Delivery Payroll", value: 1980000, change: 5.2 },
@@ -317,6 +319,7 @@ const mockDashboardData = {
     },
     opex: {
       total: 6412500,
+      change: -1.3,
       categories: [
         { name: "Sales & Marketing (S&M)", value: 2850000, change: -1.2 },
         { name: "Research & Development (R&D)", value: 2100000, change: 3.4 },
@@ -325,6 +328,7 @@ const mockDashboardData = {
     },
     otherExpenses: {
       total: 1412500,
+      change: 6.8,
       categories: [
         { name: "Amortization & Depreciation", value: 650000, change: 0.0 },
         { name: "Tax Provisioning", value: 762500, change: 12.4 }
@@ -451,6 +455,60 @@ app.get("/api/netsuite/subsidiaries", async (req, res) => {
   }
 });
 
+// API: Get Departments / Cost Centers list (dynamic from NetSuite if configured)
+app.get("/api/netsuite/departments", async (req, res) => {
+  const isConfigured = isNetsuiteConfigured();
+  if (!isConfigured) {
+    return res.json([
+      { id: "all", name: "All Cost Centers" },
+      { id: "eng", name: "Engineering / R&D" },
+      { id: "sales", name: "Sales & Marketing" },
+      { id: "admin", name: "General & Administrative" }
+    ]);
+  }
+
+  const config = getNetsuiteConfig();
+  try {
+    const domain = getNetsuiteDomain(config.accountId);
+    const queryUrl = `https://${domain}/services/rest/query/v1/suiteql`;
+
+    const executeQL = async (queryStr: string): Promise<any[]> => {
+      const authHeader = buildNetsuiteOauthHeader("POST", queryUrl);
+      const response = await fetch(queryUrl, {
+        method: "POST",
+        headers: {
+          "Authorization": authHeader,
+          "Content-Type": "application/json",
+          "prefer": "transient",
+        },
+        body: JSON.stringify({ q: queryStr }),
+      });
+      if (!response.ok) {
+        throw new Error(`NetSuite SQL error: ${response.status} - ${await response.text()}`);
+      }
+      const data = await response.json();
+      return data.items || [];
+    };
+
+    const items = await executeQL("SELECT id, name FROM department ORDER BY name");
+
+    if (items && items.length > 0) {
+      const depts = items.map((d: any) => ({ id: String(d.id), name: d.name }));
+      return res.json([{ id: "all", name: "All Cost Centers" }, ...depts]);
+    } else {
+      throw new Error("No department items returned");
+    }
+  } catch (err: any) {
+    console.warn("Failed to fetch live departments, falling back to demo ones", err);
+    return res.json([
+      { id: "all", name: "All Cost Centers (Offline Fallback)" },
+      { id: "eng", name: "Engineering / R&D (Demo)" },
+      { id: "sales", name: "Sales & Marketing (Demo)" },
+      { id: "admin", name: "General & Administrative (Demo)" }
+    ]);
+  }
+});
+
 // API: Get Combined Financial Dashboard Data (live NetSuite via SuiteQL)
 // Every section below is fetched directly from NetSuite. The hardcoded
 // mockDashboardData object is used ONLY as a structural template and as a
@@ -459,7 +517,7 @@ app.get("/api/netsuite/subsidiaries", async (req, res) => {
 app.get("/api/netsuite/dashboard", async (req, res) => {
   const isConfigured = isNetsuiteConfigured();
   const config = getNetsuiteConfig();
-  const { subsidiary } = req.query;
+  const { subsidiary, department, startDate, endDate } = req.query;
 
   // If credentials are not configured, return clearly-labelled demo data.
   if (!isConfigured) {
@@ -479,6 +537,15 @@ app.get("/api/netsuite/dashboard", async (req, res) => {
     subsidiary && /^[0-9]+$/.test(String(subsidiary)) ? String(subsidiary) : null;
   const subTL = subId ? ` AND tl.subsidiary = ${subId}` : ""; // transactionline alias tl
   const subTX = subId ? ` AND t.subsidiary = ${subId}` : ""; // transaction alias t
+
+  // Optional department filter (line-level dimension only; not present on transaction headers).
+  const deptId =
+    department && /^[0-9]+$/.test(String(department)) ? String(department) : null;
+  const deptTL = deptId ? ` AND tl.department = ${deptId}` : "";
+  // P&L/flow queries can filter by both subsidiary and department together.
+  const segmentTL = `${subTL}${deptTL}`;
+
+  const sqlDate = (d: Date) => `TO_DATE('${d.toISOString().slice(0, 10)}','YYYY-MM-DD')`;
 
   const executeQL = async (queryStr: string): Promise<any[]> => {
     const authHeader = buildNetsuiteOauthHeader("POST", queryUrl);
@@ -507,21 +574,44 @@ app.get("/api/netsuite/dashboard", async (req, res) => {
   const dash: any = JSON.parse(JSON.stringify(mockDashboardData));
   dash.isLiveNetSuite = true;
 
-  // --- 0. Reporting year (latest posted transaction) ---
-  let year = new Date().getFullYear();
-  try {
-    const r = await executeQL(
-      "SELECT TO_CHAR(MAX(trandate),'YYYY') AS y FROM transaction WHERE posting='T'"
-    );
-    const y = parseInt(r?.[0]?.y, 10);
-    if (y > 2000 && y < 2100) year = y;
-  } catch (e) {
-    /* keep default */
-  }
-  const prevYear = year - 1;
-  dash.reportingPeriod = `Fiscal Year ${year} (YTD)`;
+  // --- 0. Reporting period: explicit startDate/endDate query params win; otherwise
+  // auto-detect the latest posted fiscal year, as before. ---
+  const customStart =
+    startDate && /^\d{4}-\d{2}-\d{2}$/.test(String(startDate)) ? String(startDate) : null;
+  const customEnd =
+    endDate && /^\d{4}-\d{2}-\d{2}$/.test(String(endDate)) ? String(endDate) : null;
 
-  // --- 1. Company / subsidiary name ---
+  let periodStart: Date;
+  let periodEnd: Date;
+  if (customStart && customEnd) {
+    periodStart = new Date(`${customStart}T00:00:00Z`);
+    periodEnd = new Date(`${customEnd}T00:00:00Z`);
+  } else {
+    let year = new Date().getFullYear();
+    try {
+      const r = await executeQL(
+        "SELECT TO_CHAR(MAX(trandate),'YYYY') AS y FROM transaction WHERE posting='T'"
+      );
+      const y = parseInt(r?.[0]?.y, 10);
+      if (y > 2000 && y < 2100) year = y;
+    } catch (e) {
+      /* keep default */
+    }
+    periodStart = new Date(Date.UTC(year, 0, 1));
+    periodEnd = new Date(Date.UTC(year, 11, 31));
+  }
+  const priorStart = new Date(
+    Date.UTC(periodStart.getUTCFullYear() - 1, periodStart.getUTCMonth(), periodStart.getUTCDate())
+  );
+  const priorEnd = new Date(
+    Date.UTC(periodEnd.getUTCFullYear() - 1, periodEnd.getUTCMonth(), periodEnd.getUTCDate())
+  );
+
+  const fmtPeriodDate = (d: Date) =>
+    d.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric", timeZone: "UTC" });
+  dash.reportingPeriod = `${fmtPeriodDate(periodStart)} – ${fmtPeriodDate(periodEnd)}`;
+
+  // --- 1. Company / subsidiary name (+ optional department suffix) ---
   try {
     const q = subId
       ? `SELECT fullname AS name FROM subsidiary WHERE id = ${subId}`
@@ -530,6 +620,14 @@ app.get("/api/netsuite/dashboard", async (req, res) => {
     if (r?.[0]?.name) dash.companyName = r[0].name;
   } catch (e) {
     /* keep template name */
+  }
+  if (deptId) {
+    try {
+      const dr = await executeQL(`SELECT name FROM department WHERE id = ${deptId}`);
+      if (dr?.[0]?.name) dash.reportingPeriod += ` · ${dr[0].name}`;
+    } catch (e) {
+      /* skip department suffix */
+    }
   }
 
   // Helper: build a P&L section (Income / Expense style accounts).
@@ -542,10 +640,10 @@ app.get("/api/netsuite/dashboard", async (req, res) => {
     const sign = negate ? "-" : "";
     const q =
       `SELECT a.fullname AS name, ` +
-      `${sign}SUM(CASE WHEN t.trandate >= TO_DATE('${year}-01-01','YYYY-MM-DD') THEN tl.amount ELSE 0 END) AS curr, ` +
-      `${sign}SUM(CASE WHEN t.trandate >= TO_DATE('${prevYear}-01-01','YYYY-MM-DD') AND t.trandate < TO_DATE('${year}-01-01','YYYY-MM-DD') THEN tl.amount ELSE 0 END) AS prior ` +
+      `${sign}SUM(CASE WHEN t.trandate >= ${sqlDate(periodStart)} AND t.trandate <= ${sqlDate(periodEnd)} THEN tl.amount ELSE 0 END) AS curr, ` +
+      `${sign}SUM(CASE WHEN t.trandate >= ${sqlDate(priorStart)} AND t.trandate <= ${sqlDate(priorEnd)} THEN tl.amount ELSE 0 END) AS prior ` +
       `FROM transactionline tl JOIN account a ON tl.account = a.id JOIN transaction t ON tl.transaction = t.id ` +
-      `WHERE a.accttype = '${acctType}' AND t.posting = 'T' AND t.trandate >= TO_DATE('${prevYear}-01-01','YYYY-MM-DD')${subTL} ` +
+      `WHERE a.accttype = '${acctType}' AND t.posting = 'T' AND t.trandate >= ${sqlDate(priorStart)} AND t.trandate <= ${sqlDate(periodEnd)}${segmentTL} ` +
       `GROUP BY a.fullname ORDER BY curr DESC`;
     const rows = await executeQL(q);
     const cleaned = rows
@@ -582,14 +680,15 @@ app.get("/api/netsuite/dashboard", async (req, res) => {
   let cogsTotal: number | undefined;
   let opexTotal: number | undefined;
 
+  const pctChange = (cur: number, prior: number) =>
+    prior > 0 ? parseFloat((((cur - prior) / prior) * 100).toFixed(1)) : 0;
+
   try {
     const rev = await buildPnlSection("Revenue", "Income", true);
-    dash.incomeStatement.revenue = { total: rev.total, categories: rev.categories };
+    const revChange = pctChange(rev.total, rev.priorTotal);
+    dash.incomeStatement.revenue = { total: rev.total, change: revChange, categories: rev.categories };
     dash.kpis.revenue.value = rev.total;
-    dash.kpis.revenue.change =
-      rev.priorTotal > 0
-        ? parseFloat((((rev.total - rev.priorTotal) / rev.priorTotal) * 100).toFixed(1))
-        : 0;
+    dash.kpis.revenue.change = revChange;
     dash.kpis.revenue.status =
       rev.total >= dash.kpis.revenue.target ? "above_target" : "below_target";
     revenueTotal = rev.total;
@@ -600,7 +699,11 @@ app.get("/api/netsuite/dashboard", async (req, res) => {
 
   try {
     const cogs = await buildPnlSection("COGS", "COGS", false);
-    dash.incomeStatement.cogs = { total: cogs.total, categories: cogs.categories };
+    dash.incomeStatement.cogs = {
+      total: cogs.total,
+      change: pctChange(cogs.total, cogs.priorTotal),
+      categories: cogs.categories,
+    };
     cogsTotal = cogs.total;
     liveSections.push("cogs");
   } catch (e) {
@@ -609,12 +712,10 @@ app.get("/api/netsuite/dashboard", async (req, res) => {
 
   try {
     const opex = await buildPnlSection("OpEx", "Expense", false);
-    dash.incomeStatement.opex = { total: opex.total, categories: opex.categories };
+    const opexChange = pctChange(opex.total, opex.priorTotal);
+    dash.incomeStatement.opex = { total: opex.total, change: opexChange, categories: opex.categories };
     dash.kpis.operatingExpenses.value = opex.total;
-    dash.kpis.operatingExpenses.change =
-      opex.priorTotal > 0
-        ? parseFloat((((opex.total - opex.priorTotal) / opex.priorTotal) * 100).toFixed(1))
-        : 0;
+    dash.kpis.operatingExpenses.change = opexChange;
     dash.kpis.operatingExpenses.status =
       opex.total <= dash.kpis.operatingExpenses.budget ? "within_budget" : "over_budget";
     opexTotal = opex.total;
@@ -628,6 +729,7 @@ app.get("/api/netsuite/dashboard", async (req, res) => {
     if (other.total > 0) {
       dash.incomeStatement.otherExpenses = {
         total: other.total,
+        change: pctChange(other.total, other.priorTotal),
         categories: other.categories,
       };
     }
@@ -659,7 +761,7 @@ app.get("/api/netsuite/dashboard", async (req, res) => {
       `SELECT a.accttype AS accttype, SUM(tl.amount) AS bal ` +
       `FROM transactionline tl JOIN account a ON tl.account = a.id JOIN transaction t ON tl.transaction = t.id ` +
       `WHERE a.accttype IN ('Bank','AcctRec','OthCurrAsset','UnbilledRec','FixedAsset','OthAsset','AcctPay','CredCard','OthCurrLiab','LongTermLiab','Equity') ` +
-      `AND t.posting='T'${subTL} GROUP BY a.accttype`;
+      `AND t.posting='T' AND t.trandate <= ${sqlDate(periodEnd)}${subTL} GROUP BY a.accttype`;
     const rows = await executeQL(q);
     const bal: Record<string, number> = {};
     rows.forEach((r: any) => {
@@ -731,7 +833,7 @@ app.get("/api/netsuite/dashboard", async (req, res) => {
       `SUM(CASE WHEN (SYSDATE - NVL(t.duedate,t.trandate)) BETWEEN 61 AND 90 THEN t.foreignamountunpaid ELSE 0 END) AS c90, ` +
       `SUM(CASE WHEN (SYSDATE - NVL(t.duedate,t.trandate)) > 90 THEN t.foreignamountunpaid ELSE 0 END) AS c90p, ` +
       `SUM(t.foreignamountunpaid) AS total ` +
-      `FROM transaction t WHERE t.type='CustInvc' AND t.foreignamountunpaid > 0${subTX}`;
+      `FROM transaction t WHERE t.type='CustInvc' AND t.foreignamountunpaid > 0 AND t.trandate <= ${sqlDate(periodEnd)}${subTX}`;
     const br = (await executeQL(bq))[0] || {};
     const total = parseFloat(br.total) || 0;
     const mk = (label: string, v: any) => {
@@ -755,7 +857,7 @@ app.get("/api/netsuite/dashboard", async (req, res) => {
       `SELECT c.companyname AS company, SUM(t.foreignamountunpaid) AS amount, ` +
       `ROUND(AVG(SYSDATE - NVL(t.duedate,t.trandate))) AS days ` +
       `FROM transaction t JOIN customer c ON t.entity = c.id ` +
-      `WHERE t.type='CustInvc' AND t.foreignamountunpaid > 0${subTX} ` +
+      `WHERE t.type='CustInvc' AND t.foreignamountunpaid > 0 AND t.trandate <= ${sqlDate(periodEnd)}${subTX} ` +
       `GROUP BY c.companyname ORDER BY amount DESC FETCH FIRST 6 ROWS ONLY`;
     const drows = await executeQL(dq);
     dash.arAging.debtors = drows.map((d: any) => {
@@ -780,7 +882,7 @@ app.get("/api/netsuite/dashboard", async (req, res) => {
 
   // --- 5. AP-derived DPO ---
   try {
-    const apq = `SELECT SUM(t.foreignamountunpaid) AS ap FROM transaction t WHERE t.type='VendBill' AND t.foreignamountunpaid > 0${subTX}`;
+    const apq = `SELECT SUM(t.foreignamountunpaid) AS ap FROM transaction t WHERE t.type='VendBill' AND t.foreignamountunpaid > 0 AND t.trandate <= ${sqlDate(periodEnd)}${subTX}`;
     const ap = parseFloat((await executeQL(apq))[0]?.ap) || 0;
     const base = (cogsTotal || 0) + (opexTotal || 0);
     if (base > 0) {
@@ -793,12 +895,15 @@ app.get("/api/netsuite/dashboard", async (req, res) => {
   // --- 6. Forecasts from real monthly history ---
   // Actuals are pulled live; forward months are a transparent moving-average projection.
   try {
+    const forecastStart = new Date(
+      Date.UTC(periodEnd.getUTCFullYear(), periodEnd.getUTCMonth() - 13, 1)
+    );
     const mq =
       `SELECT TO_CHAR(t.trandate,'YYYY-MM') AS ym, ` +
       `-SUM(CASE WHEN a.accttype='Income' THEN tl.amount ELSE 0 END) AS revenue, ` +
       `SUM(CASE WHEN a.accttype='COGS' THEN tl.amount ELSE 0 END) AS cogs ` +
       `FROM transactionline tl JOIN account a ON tl.account = a.id JOIN transaction t ON tl.transaction = t.id ` +
-      `WHERE a.accttype IN ('Income','COGS') AND t.posting='T' AND t.trandate >= TO_DATE('${prevYear}-12-01','YYYY-MM-DD')${subTL} ` +
+      `WHERE a.accttype IN ('Income','COGS') AND t.posting='T' AND t.trandate >= ${sqlDate(forecastStart)} AND t.trandate <= ${sqlDate(periodEnd)}${segmentTL} ` +
       `GROUP BY TO_CHAR(t.trandate,'YYYY-MM') ORDER BY ym`;
     const mrows = await executeQL(mq);
     const months = mrows
@@ -1079,10 +1184,10 @@ interface DashboardData {
   cashForecast: Array<{ period: string; cashIn: number; cashOut: number; netFlow: number; balance: number }>; // 6-month sequence
   salesForecast: Array<{ period: string; actualRevenue: number; forecastRevenue: number; actualGP: number; forecastGP: number }>; // 6-month sequence
   incomeStatement: {
-    revenue: { total: number; categories: Array<{ name: string; value: number; change: number }> };
-    cogs: { total: number; categories: Array<{ name: string; value: number; change: number }> };
-    opex: { total: number; categories: Array<{ name: string; value: number; change: number }> };
-    otherExpenses: { total: number; categories: Array<{ name: string; value: number; change: number }> };
+    revenue: { total: number; change: number; categories: Array<{ name: string; value: number; change: number }> }; // change: total YoY %
+    cogs: { total: number; change: number; categories: Array<{ name: string; value: number; change: number }> };
+    opex: { total: number; change: number; categories: Array<{ name: string; value: number; change: number }> };
+    otherExpenses: { total: number; change: number; categories: Array<{ name: string; value: number; change: number }> };
   };
   balanceSheet: {
     assets: {

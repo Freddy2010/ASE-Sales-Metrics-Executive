@@ -35,6 +35,24 @@ export default function ReportViewer({ incomeStatement, balanceSheet, arAging }:
   const operatingProfit = grossProfit - opexTotal;
   const netIncome = operatingProfit - otherTotal;
 
+  // YoY change for summary rows, derived from the section-level changes already provided
+  const priorOf = (total: number, changePct: number) => (changePct !== 0 ? total / (1 + changePct / 100) : total);
+  const pctChange = (cur: number, prior: number) => (prior !== 0 ? ((cur - prior) / prior) * 100 : 0);
+  const formatChange = (val: number) => `${val >= 0 ? "+" : ""}${val.toFixed(1)}%`;
+
+  const priorRevenue = priorOf(revTotal, incomeStatement.revenue.change);
+  const priorCogs = priorOf(cogsTotal, incomeStatement.cogs.change);
+  const priorGrossProfit = priorRevenue - priorCogs;
+  const gpChange = pctChange(grossProfit, priorGrossProfit);
+
+  const priorOpex = priorOf(opexTotal, incomeStatement.opex.change);
+  const priorOperatingProfit = priorGrossProfit - priorOpex;
+  const oiChange = pctChange(operatingProfit, priorOperatingProfit);
+
+  const priorOther = priorOf(otherTotal, incomeStatement.otherExpenses.change);
+  const priorNetIncome = priorOperatingProfit - priorOther;
+  const niChange = pctChange(netIncome, priorNetIncome);
+
   // Search filter for P&L items
   const filterCategories = (cats: Array<{ name: string; value: number; change: number }>) => {
     return cats.filter((c) => c.name.toLowerCase().includes(searchQuery.toLowerCase()));
@@ -130,7 +148,7 @@ export default function ReportViewer({ incomeStatement, balanceSheet, arAging }:
                 </td>
                 <td className="py-3 text-right pr-2">{formatCurrency(revTotal)}</td>
                 <td className="py-3 text-right text-slate-500">100.0%</td>
-                <td className="py-3 text-right text-emerald-700 font-bold font-mono">+12.4%</td>
+                <td className={`py-3 text-right font-bold font-mono ${incomeStatement.revenue.change >= 0 ? "text-emerald-700" : "text-rose-700"}`}>{formatChange(incomeStatement.revenue.change)}</td>
               </tr>
               {expandedSections.revenue &&
                 filterCategories(incomeStatement.revenue.categories).map((cat, i) => (
@@ -157,7 +175,7 @@ export default function ReportViewer({ incomeStatement, balanceSheet, arAging }:
                 </td>
                 <td className="py-3 text-right pr-2">{formatCurrency(cogsTotal)}</td>
                 <td className="py-3 text-right text-slate-500">{(((cogsTotal || 0) / (revTotal || 1)) * 100).toFixed(1)}%</td>
-                <td className="py-3 text-right text-rose-700 font-bold font-mono">+4.2%</td>
+                <td className={`py-3 text-right font-bold font-mono ${incomeStatement.cogs.change <= 0 ? "text-emerald-700" : "text-rose-700"}`}>{formatChange(incomeStatement.cogs.change)}</td>
               </tr>
               {expandedSections.cogs &&
                 filterCategories(incomeStatement.cogs.categories).map((cat, i) => (
@@ -178,7 +196,7 @@ export default function ReportViewer({ incomeStatement, balanceSheet, arAging }:
                 <td className="py-3 pl-2">GROSS PROFIT</td>
                 <td className="py-3 text-right pr-2">{formatCurrency(grossProfit)}</td>
                 <td className="py-3 text-right">{(((grossProfit || 0) / (revTotal || 1)) * 100).toFixed(1)}%</td>
-                <td className="py-3 text-right font-mono font-bold">+16.8%</td>
+                <td className="py-3 text-right font-mono font-bold">{formatChange(gpChange)}</td>
               </tr>
 
               {/* --- OPEX SECTION --- */}
@@ -192,7 +210,7 @@ export default function ReportViewer({ incomeStatement, balanceSheet, arAging }:
                 </td>
                 <td className="py-3 text-right pr-2">{formatCurrency(opexTotal)}</td>
                 <td className="py-3 text-right text-slate-500">{(((opexTotal || 0) / (revTotal || 1)) * 100).toFixed(1)}%</td>
-                <td className="py-3 text-right text-emerald-700 font-bold font-mono">-1.3%</td>
+                <td className={`py-3 text-right font-bold font-mono ${incomeStatement.opex.change <= 0 ? "text-emerald-700" : "text-rose-700"}`}>{formatChange(incomeStatement.opex.change)}</td>
               </tr>
               {expandedSections.opex &&
                 filterCategories(incomeStatement.opex.categories).map((cat, i) => (
@@ -213,7 +231,7 @@ export default function ReportViewer({ incomeStatement, balanceSheet, arAging }:
                 <td className="py-3 pl-2 uppercase">Operating Income (EBITDA)</td>
                 <td className="py-3 text-right pr-2">{formatCurrency(operatingProfit)}</td>
                 <td className="py-3 text-right">{(((operatingProfit || 0) / (revTotal || 1)) * 100).toFixed(1)}%</td>
-                <td className="py-3 text-right font-mono font-bold text-emerald-700">+24.5%</td>
+                <td className={`py-3 text-right font-mono font-bold ${oiChange >= 0 ? "text-emerald-700" : "text-rose-700"}`}>{formatChange(oiChange)}</td>
               </tr>
 
               {/* --- OTHER EXPENSES (Depr, Taxes) --- */}
@@ -227,7 +245,7 @@ export default function ReportViewer({ incomeStatement, balanceSheet, arAging }:
                 </td>
                 <td className="py-3 text-right pr-2">{formatCurrency(otherTotal)}</td>
                 <td className="py-3 text-right text-slate-500">{(((otherTotal || 0) / (revTotal || 1)) * 100).toFixed(1)}%</td>
-                <td className="py-3 text-right text-rose-700 font-bold font-mono">+6.8%</td>
+                <td className={`py-3 text-right font-bold font-mono ${incomeStatement.otherExpenses.change <= 0 ? "text-emerald-700" : "text-rose-700"}`}>{formatChange(incomeStatement.otherExpenses.change)}</td>
               </tr>
               {expandedSections.other &&
                 filterCategories(incomeStatement.otherExpenses.categories).map((cat, i) => (
@@ -248,7 +266,7 @@ export default function ReportViewer({ incomeStatement, balanceSheet, arAging }:
                 <td className="py-4 pl-2 uppercase tracking-wide">YTD NET INCOME</td>
                 <td className="py-4 text-right pr-2 font-mono">{formatCurrency(netIncome)}</td>
                 <td className="py-4 text-right font-mono">{(((netIncome || 0) / (revTotal || 1)) * 100).toFixed(1)}%</td>
-                <td className="py-4 text-right font-mono font-bold text-emerald-700">+27.6%</td>
+                <td className={`py-4 text-right font-mono font-bold ${niChange >= 0 ? "text-emerald-700" : "text-rose-700"}`}>{formatChange(niChange)}</td>
               </tr>
             </tbody>
           </table>
