@@ -65,7 +65,7 @@ export default function AIChatBox({ contextData, onDrillDown }: AIChatBoxProps) 
         content: m.content
       }));
 
-      const res = await fetch("/api/gemini/chat", {
+      const res = await fetch("/api/claude/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({

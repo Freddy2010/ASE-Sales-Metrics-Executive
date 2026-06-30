@@ -2,7 +2,7 @@ import express from "express";
 import path from "path";
 import crypto from "crypto";
 import dotenv from "dotenv";
-import { GoogleGenAI } from "@google/genai";
+import Anthropic from "@anthropic-ai/sdk";
 import { createServer as createViteServer } from "vite";
 
 // Load environment variables
@@ -27,23 +27,27 @@ function cleanEnvVar(val: string | undefined): string {
   return clean.trim();
 }
 
-// Initialize Gemini API client safely (lazy loaded/guarded)
-let aiClient: GoogleGenAI | null = null;
-function getAiClient(): GoogleGenAI | null {
+// Initialize Claude API client safely (lazy loaded/guarded)
+let aiClient: Anthropic | null = null;
+function getAiClient(): Anthropic | null {
   if (!aiClient) {
-    const key = cleanEnvVar(process.env.GEMINI_API_KEY);
-    if (key && key !== "MY_GEMINI_API_KEY") {
-      aiClient = new GoogleGenAI({
+    const key = cleanEnvVar(process.env.ANTHROPIC_API_KEY);
+    if (key && key !== "MY_ANTHROPIC_API_KEY") {
+      aiClient = new Anthropic({
         apiKey: key,
-        httpOptions: {
-          headers: {
-            "User-Agent": "aistudio-build",
-          },
+        defaultHeaders: {
+          "User-Agent": "aistudio-build",
         },
       });
     }
   }
   return aiClient;
+}
+
+// Pull the first text block out of a Claude response's content array.
+function extractText(content: Anthropic.Messages.ContentBlock[]): string {
+  const block = content.find((b) => b.type === "text");
+  return block && block.type === "text" ? block.text : "";
 }
 
 // NetSuite credentials status
@@ -944,7 +948,7 @@ app.post("/api/netsuite/query", async (req, res) => {
   }
 });
 
-// API: Generate Executive Commentary/Narrative using Gemini model (server-side API proxy)
+// API: Generate Executive Commentary/Narrative using Claude model (server-side API proxy)
 app.post("/api/netsuite/analysis", async (req, res) => {
   const { financeData } = req.body;
   const ai = getAiClient();
@@ -952,7 +956,7 @@ app.post("/api/netsuite/analysis", async (req, res) => {
   if (!ai) {
     return res.json({
       analysis: `### **Executive Financial Briefing (Offline Engine)**\n\n` +
-        `*Please configure your **GEMINI_API_KEY** secret to unlock advanced AI executive narrative summaries and scenario projections.* \n\n` +
+        `*Please configure your **ANTHROPIC_API_KEY** secret to unlock advanced AI executive narrative summaries and scenario projections.* \n\n` +
         `**Key Observations:**\n` +
         `- **Superior EBITDA Margin**: Operating margins have expanded to **23.9%**, primarily driven by an 18.2% surge in SaaS subscription revenues.\n` +
         `- **Optimized Accounts Receivable**: DSO improved significantly from **48** to **42 days**, generating an incremental cash cushion of roughly **$412K** in current liquidity.\n` +
@@ -977,28 +981,29 @@ Guidelines:
 NetSuite Financial Data Structure:
 ${dataString}`;
 
-    // Call Gemini API using modern GoogleGenAI SDK
-    const response = await ai.models.generateContent({
-      model: "gemini-2.5-flash",
-      contents: prompt,
+    // Call Claude API using the Anthropic SDK
+    const response = await ai.messages.create({
+      model: "claude-opus-4-8",
+      max_tokens: 2048,
+      messages: [{ role: "user", content: prompt }],
     });
 
-    const markdownText = response.text || "No response text generated.";
+    const markdownText = extractText(response.content) || "No response text generated.";
     res.json({ analysis: markdownText });
 
   } catch (err: any) {
-    res.status(500).json({ error: `Gemini API Analysis failed: ${err.message || err}` });
+    res.status(500).json({ error: `Claude API Analysis failed: ${err.message || err}` });
   }
 });
 
 // API: CFO AI Chat dialogue proxy (state-free conversation based on active context)
-app.post("/api/gemini/chat", async (req, res) => {
+app.post("/api/claude/chat", async (req, res) => {
   const { messages, context } = req.body;
   const ai = getAiClient();
 
   if (!ai) {
     return res.json({
-      response: `Hello! I am your offline financial AI. To unlock the live Gemini-powered conversation engine and drill down into real-time ledger questions, please configure your **GEMINI_API_KEY** in the Settings panel.
+      response: `Hello! I am your offline financial AI. To unlock the live Claude-powered conversation engine and drill down into real-time ledger questions, please configure your **ANTHROPIC_API_KEY** in the Settings panel.
 
 Currently, I am running in local demo mode. I can see you are looking at **${context?.companyName || "the active company"}** with a cash balance of **${context?.kpis?.cashBalance?.value ? "$" + context.kpis.cashBalance.value.toLocaleString() : "N/A"}**.`
     });
@@ -1016,23 +1021,19 @@ Instructions:
 3. Be helpful, concise, and professional. Avoid generic platitudes or greeting clutter. Keep markdown structure tidy.
 4. If asked how to switch dashboard views (Consolidated Overview, KPI Performance, Scenario Modeling, AI Narrative, Ledger Financial Reports), clearly explain that they can use the workspace tab selector at the top, or click directly on any primary metric KPI card (like Cash Balance, Revenue, Gross Profit, operating expenses, or DSO) to automatically trigger a drill-down into that dedicated workspace view!`;
 
-    const formattedContents = (messages || []).map((m: any) => {
-      const role = m.role === "assistant" ? "model" : "user";
-      return {
-        role,
-        parts: [{ text: m.content || "" }]
-      };
+    const formattedMessages: Anthropic.Messages.MessageParam[] = (messages || []).map((m: any) => ({
+      role: m.role === "assistant" ? "assistant" : "user",
+      content: m.content || "",
+    }));
+
+    const response = await ai.messages.create({
+      model: "claude-opus-4-8",
+      max_tokens: 1536,
+      system: systemPrompt,
+      messages: formattedMessages,
     });
 
-    const response = await ai.models.generateContent({
-      model: "gemini-3.5-flash",
-      contents: formattedContents,
-      config: {
-        systemInstruction: systemPrompt
-      }
-    });
-
-    res.json({ response: response.text || "I was unable to generate a response." });
+    res.json({ response: extractText(response.content) || "I was unable to generate a response." });
   } catch (err: any) {
     res.status(500).json({ error: `AI Chat failed: ${err.message || err}` });
   }
@@ -1048,8 +1049,8 @@ app.post("/api/netsuite/parse-saved-search", async (req, res) => {
   }
 
   if (!ai) {
-    return res.status(400).json({ 
-      error: "Gemini API key is required to convert raw Saved Searches. Please configure your GEMINI_API_KEY in the Settings > Secrets panel." 
+    return res.status(400).json({
+      error: "Claude API key is required to convert raw Saved Searches. Please configure your ANTHROPIC_API_KEY in the Settings > Secrets panel."
     });
   }
 
@@ -1107,17 +1108,15 @@ Rules:
 3. If sections are missing in the raw search (for example, if it's only an AR aging saved search, or only an income statement saved search), you MUST generate realistic, consistent, and balanced numbers for the other sections so the user gets a fully functional and beautiful dashboard!
 4. The Balance Sheet MUST balance perfectly: Total Assets (current + non-current) MUST exactly equal Total Liabilities (current + non-current) + Total Equity.
 5. Gross Profit MUST equal Revenue - COGS. Net Income MUST equal Gross Profit - OPEX - Other Expenses (taxes/etc).
-6. Return ONLY the JSON object. Do not include any markdown fences or explanation. Use responseMimeType: "application/json" output.`;
+6. Return ONLY the JSON object. Do not include any markdown fences or explanation.`;
 
-    const response = await ai.models.generateContent({
-      model: "gemini-3.5-flash",
-      contents: prompt,
-      config: {
-        responseMimeType: "application/json"
-      }
+    const response = await ai.messages.create({
+      model: "claude-opus-4-8",
+      max_tokens: 8192,
+      messages: [{ role: "user", content: prompt }],
     });
 
-    const text = response.text || "{}";
+    const text = extractText(response.content) || "{}";
     let parsedData;
     try {
       parsedData = JSON.parse(text.trim());
