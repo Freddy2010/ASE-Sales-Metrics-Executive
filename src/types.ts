@@ -42,6 +42,7 @@ export interface FinancialCategory {
 
 export interface FinancialSection {
   total: number;
+  change: number;
   categories: FinancialCategory[];
 }
 

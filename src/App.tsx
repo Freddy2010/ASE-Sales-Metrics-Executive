@@ -16,6 +16,7 @@ export default function App() {
   const [loading, setLoading] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
   const [subsidiaries, setSubsidiaries] = useState<Array<{ id: string; name: string; currency?: string }>>([]);
+  const [departments, setDepartments] = useState<Array<{ id: string; name: string }>>([]);
 
   // Filter States (Standard NetSuite Segments)
   const [selectedSubsidiary, setSelectedSubsidiary] = useState<string>("all");
@@ -24,8 +25,8 @@ export default function App() {
 
   // Date Range Filter States
   const [dateRange, setDateRange] = useState<string>("ytd");
-  const [startDate, setStartDate] = useState<string>("2026-01-01");
-  const [endDate, setEndDate] = useState<string>("2026-06-29");
+  const [startDate, setStartDate] = useState<string>(`${new Date().getFullYear()}-01-01`);
+  const [endDate, setEndDate] = useState<string>(new Date().toISOString().slice(0, 10));
 
   // Dashboard Tab/Screen Mode State
   const [dashboardView, setDashboardView] = useState<"all" | "kpis" | "forecasts" | "analysis" | "reports">("all");
@@ -37,11 +38,50 @@ export default function App() {
   const [comparePeriods, setComparePeriods] = useState<boolean>(false);
   const [compareLoading, setCompareLoading] = useState<boolean>(false);
 
-  const syncData = async (subId?: string) => {
+  // Translate a date-range selector value into concrete start/end dates for the server.
+  // "ytd" omits dates entirely so the server falls back to its latest-posted-fiscal-year logic.
+  const getPeriodRange = (
+    range: string,
+    custStart: string,
+    custEnd: string
+  ): { startDate?: string; endDate?: string } => {
+    const fmt = (d: Date) => d.toISOString().slice(0, 10);
+    const now = new Date();
+    if (range === "q1") {
+      return { startDate: `${now.getFullYear()}-01-01`, endDate: `${now.getFullYear()}-03-31` };
+    } else if (range === "q2") {
+      return { startDate: `${now.getFullYear()}-04-01`, endDate: `${now.getFullYear()}-06-30` };
+    } else if (range === "30days") {
+      const s = new Date(now);
+      s.setDate(s.getDate() - 30);
+      return { startDate: fmt(s), endDate: fmt(now) };
+    } else if (range === "90days") {
+      const s = new Date(now);
+      s.setDate(s.getDate() - 90);
+      return { startDate: fmt(s), endDate: fmt(now) };
+    } else if (range === "custom") {
+      return { startDate: custStart, endDate: custEnd };
+    }
+    return {};
+  };
+
+  interface SyncOverrides {
+    subsidiary?: string;
+    department?: string;
+    dateRange?: string;
+    startDate?: string;
+    endDate?: string;
+  }
+
+  const syncData = async (overrides: SyncOverrides = {}) => {
     setLoading(true);
     setError(null);
     try {
-      const activeSub = subId !== undefined ? subId : selectedSubsidiary;
+      const activeSub = overrides.subsidiary !== undefined ? overrides.subsidiary : selectedSubsidiary;
+      const activeDept = overrides.department !== undefined ? overrides.department : selectedDept;
+      const activeRange = overrides.dateRange !== undefined ? overrides.dateRange : dateRange;
+      const activeStart = overrides.startDate !== undefined ? overrides.startDate : startDate;
+      const activeEnd = overrides.endDate !== undefined ? overrides.endDate : endDate;
 
       // 1. Fetch connection status
       const statusRes = await fetch("/api/netsuite/status");
@@ -49,15 +89,23 @@ export default function App() {
       const statusData = await statusRes.json();
       setNetsuiteStatus(statusData);
 
-      // 2. Fetch live subsidiaries if connected
-      const subsRes = await fetch("/api/netsuite/subsidiaries");
-      if (subsRes.ok) {
-        const subsData = await subsRes.json();
-        setSubsidiaries(subsData);
-      }
+      // 2. Fetch live subsidiaries & departments
+      const [subsRes, deptsRes] = await Promise.all([
+        fetch("/api/netsuite/subsidiaries"),
+        fetch("/api/netsuite/departments"),
+      ]);
+      if (subsRes.ok) setSubsidiaries(await subsRes.json());
+      if (deptsRes.ok) setDepartments(await deptsRes.json());
 
-      // 3. Fetch financial dashboard metrics with subsidiary filter
-      const dashboardRes = await fetch(`/api/netsuite/dashboard?subsidiary=${activeSub}`);
+      // 3. Fetch financial dashboard metrics with real subsidiary/department/date filters
+      const params = new URLSearchParams({ subsidiary: activeSub });
+      if (activeDept && activeDept !== "all") params.set("department", activeDept);
+      const range = getPeriodRange(activeRange, activeStart, activeEnd);
+      if (range.startDate && range.endDate) {
+        params.set("startDate", range.startDate);
+        params.set("endDate", range.endDate);
+      }
+      const dashboardRes = await fetch(`/api/netsuite/dashboard?${params.toString()}`);
       if (!dashboardRes.ok) throw new Error("Failed to contact server financial data API.");
       const data = await dashboardRes.json();
       setDashboardData(data);
@@ -72,266 +120,7 @@ export default function App() {
     syncData();
   }, []);
 
-  // Filter adjustment simulations
-  const getFilteredDashboardData = (): DashboardData | null => {
-    if (!dashboardData) return null;
-    
-    // Create a deep copy of the base dashboard data to prevent mutations
-    let filtered = JSON.parse(JSON.stringify(dashboardData)) as DashboardData;
-
-    // 1. Handle Subsidiary selection
-    let subScale = 1.0;
-    const isDynamicSub = selectedSubsidiary !== "all" && selectedSubsidiary !== "us" && selectedSubsidiary !== "emea";
-    if (selectedSubsidiary === "us") {
-      filtered.companyName = "Acme US Inc. (NetSuite Subsidiary ID: 4)";
-      subScale = 0.7;
-    } else if (selectedSubsidiary === "emea") {
-      filtered.companyName = "Acme EMEA Ltd. (NetSuite Subsidiary ID: 8)";
-      subScale = 0.3;
-    } else if (isDynamicSub && subsidiaries.length > 0) {
-      const match = subsidiaries.find(s => s.id === selectedSubsidiary);
-      if (match) {
-        filtered.companyName = match.name;
-      }
-      subScale = 1.0; // Dynamic ones already filtered on server side
-    }
-
-    // 2. Handle Department / Cost Center selection
-    let deptOpexScale = 1.0;
-    let deptLabel = "";
-    if (selectedDept === "eng") {
-      deptOpexScale = 0.327;
-      deptLabel = " [R&D Division]";
-    } else if (selectedDept === "sales") {
-      deptOpexScale = 0.444;
-      deptLabel = " [S&M Division]";
-    } else if (selectedDept === "admin") {
-      deptOpexScale = 0.229;
-      deptLabel = " [G&A Division]";
-    }
-
-    // 3. Handle Date Range selection & Scaling
-    let scaleFactor = 1.0;
-    let bsScale = 1.0; // Balance sheet scale (cumulative)
-    let dsoShift = 0; // DSO shift
-    let periodName = "Current Fiscal Year (YTD)";
-
-    if (dateRange === "q1") {
-      scaleFactor = 0.45;
-      bsScale = 0.82;
-      dsoShift = 2; // Q1 had slightly worse DSO (44 days)
-      periodName = "Q1 2026 (Jan 1, 2026 - Mar 31, 2026)";
-    } else if (dateRange === "q2") {
-      scaleFactor = 0.55;
-      bsScale = 0.96;
-      dsoShift = -1; // Q2 had slightly better DSO (41 days)
-      periodName = "Q2 2026 (Apr 1, 2026 - Jun 30, 2026)";
-    } else if (dateRange === "30days") {
-      scaleFactor = 0.16;
-      bsScale = 1.0; // current point-in-time
-      dsoShift = 0;
-      periodName = "Last 30 Days (May 30, 2026 - Jun 29, 2026)";
-    } else if (dateRange === "90days") {
-      scaleFactor = 0.48;
-      bsScale = 0.98;
-      dsoShift = -1;
-      periodName = "Last 90 Days (Mar 31, 2026 - Jun 29, 2026)";
-    } else if (dateRange === "custom") {
-      const s = new Date(startDate);
-      const e = new Date(endDate);
-      const diffTime = Math.abs(e.getTime() - s.getTime());
-      const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24)) || 1;
-      
-      // Base scaling on ~180 days (half year representation of YTD)
-      scaleFactor = Math.min(2.0, Math.max(0.05, diffDays / 180));
-      
-      // bsScale is cumulative up to the end date
-      const yearStart = new Date("2026-01-01");
-      const endDiffTime = e.getTime() - yearStart.getTime();
-      const endDiffDays = Math.ceil(endDiffTime / (1000 * 60 * 60 * 24)) || 180;
-      bsScale = Math.min(1.2, Math.max(0.5, endDiffDays / 180));
-      
-      const options: Intl.DateTimeFormatOptions = { year: 'numeric', month: 'short', day: 'numeric' };
-      const startFormatted = s.toLocaleDateString('en-US', options);
-      const endFormatted = e.toLocaleDateString('en-US', options);
-      periodName = `Custom Period (${startFormatted} - ${endFormatted})`;
-    }
-
-    filtered.reportingPeriod = periodName + (deptLabel ? ` - ${selectedDept.toUpperCase()} Department` : "");
-
-    // Apply combined scales to KPIs
-    const combinedFlowScale = subScale * scaleFactor;
-    const combinedBSScale = subScale * bsScale;
-
-    const scaledKPIs = { ...filtered.kpis };
-    
-    // Revenue, GP, Net Income represent FLOWS, so they scale with combinedFlowScale
-    scaledKPIs.revenue = {
-      ...scaledKPIs.revenue,
-      value: Math.floor(scaledKPIs.revenue.value * combinedFlowScale),
-      target: Math.floor(scaledKPIs.revenue.target * combinedFlowScale),
-    };
-    scaledKPIs.grossProfit = {
-      ...scaledKPIs.grossProfit,
-      value: Math.floor(scaledKPIs.grossProfit.value * combinedFlowScale),
-      target: Math.floor(scaledKPIs.grossProfit.target * combinedFlowScale),
-    };
-    
-    // Operating Expenses scale with combinedFlowScale and department cost structure
-    scaledKPIs.operatingExpenses = {
-      ...scaledKPIs.operatingExpenses,
-      value: Math.floor(scaledKPIs.operatingExpenses.value * combinedFlowScale * deptOpexScale),
-      budget: Math.floor(scaledKPIs.operatingExpenses.budget * combinedFlowScale * deptOpexScale),
-    };
-
-    // Net Income is recalculated logically based on GP and OPEX
-    const simulatedGP = scaledKPIs.grossProfit.value;
-    const simulatedOpex = scaledKPIs.operatingExpenses.value;
-    const simulatedTaxes = Math.floor(filtered.kpis.netIncome.value * 0.15 * combinedFlowScale);
-    scaledKPIs.netIncome = {
-      ...scaledKPIs.netIncome,
-      value: Math.max(0, simulatedGP - simulatedOpex - simulatedTaxes),
-      target: Math.floor(scaledKPIs.netIncome.target * combinedFlowScale),
-    };
-
-    // Cash balance and collections are static / point-in-time, so they scale with combinedBSScale
-    scaledKPIs.cashBalance = {
-      ...scaledKPIs.cashBalance,
-      value: Math.floor(scaledKPIs.cashBalance.value * combinedBSScale),
-      target: Math.floor(scaledKPIs.cashBalance.target * combinedBSScale),
-    };
-
-    // DSO & DPO are adjusted slightly
-    scaledKPIs.dso = {
-      ...scaledKPIs.dso,
-      value: Math.max(25, Math.min(60, scaledKPIs.dso.value + dsoShift)),
-    };
-
-    filtered.kpis = scaledKPIs;
-
-    // Scale P&L Statement (Report View)
-    const scaledIS = { ...filtered.incomeStatement };
-    scaledIS.revenue = {
-      total: Math.floor(scaledIS.revenue.total * combinedFlowScale),
-      categories: scaledIS.revenue.categories.map(cat => ({
-        ...cat,
-        value: Math.floor(cat.value * combinedFlowScale)
-      }))
-    };
-    scaledIS.cogs = {
-      total: Math.floor(scaledIS.cogs.total * combinedFlowScale),
-      categories: scaledIS.cogs.categories.map(cat => ({
-        ...cat,
-        value: Math.floor(cat.value * combinedFlowScale)
-      }))
-    };
-    
-    // Apply department filter to opex categories in P&L
-    scaledIS.opex = {
-      total: Math.floor(scaledIS.opex.total * combinedFlowScale * deptOpexScale),
-      categories: scaledIS.opex.categories.map(cat => {
-        let isMatch = false;
-        if (selectedDept === "eng" && cat.name.includes("R&D")) isMatch = true;
-        if (selectedDept === "sales" && cat.name.includes("Sales")) isMatch = true;
-        if (selectedDept === "admin" && cat.name.includes("Administrative")) isMatch = true;
-        
-        const opexCatVal = isMatch 
-          ? Math.floor(cat.value * combinedFlowScale) 
-          : selectedDept === "all" 
-            ? Math.floor(cat.value * combinedFlowScale)
-            : Math.floor(cat.value * combinedFlowScale * 0.1); // Proportional other sections
-
-        return {
-          ...cat,
-          value: opexCatVal
-        };
-      })
-    };
-    
-    // Recalculate total OPEX as sum of categories
-    scaledIS.opex.total = scaledIS.opex.categories.reduce((sum, c) => sum + c.value, 0);
-
-    scaledIS.otherExpenses = {
-      total: Math.floor(scaledIS.otherExpenses.total * combinedFlowScale),
-      categories: scaledIS.otherExpenses.categories.map(cat => ({
-        ...cat,
-        value: Math.floor(cat.value * combinedFlowScale)
-      }))
-    };
-    filtered.incomeStatement = scaledIS;
-
-    // Scale Balance Sheet (uses combinedBSScale)
-    const scaledBS = { ...filtered.balanceSheet };
-    scaledBS.assets = {
-      current: scaledBS.assets.current.map(item => {
-        if (item.name === "Cash and Cash Equivalents") {
-          return { ...item, value: scaledKPIs.cashBalance.value };
-        }
-        return { ...item, value: Math.floor(item.value * combinedBSScale) };
-      }),
-      nonCurrent: scaledBS.assets.nonCurrent.map(item => ({
-        ...item,
-        value: Math.floor(item.value * combinedBSScale)
-      }))
-    };
-
-    scaledBS.liabilities = {
-      current: scaledBS.liabilities.current.map(item => ({
-        ...item,
-        value: Math.floor(item.value * combinedBSScale)
-      })),
-      nonCurrent: scaledBS.liabilities.nonCurrent.map(item => ({
-        ...item,
-        value: Math.floor(item.value * combinedBSScale)
-      }))
-    };
-
-    // Keep the balance sheet perfectly balanced
-    const curAssets = scaledBS.assets.current.reduce((sum, item) => sum + item.value, 0);
-    const nonCurAssets = scaledBS.assets.nonCurrent.reduce((sum, item) => sum + item.value, 0);
-    const totAssets = curAssets + nonCurAssets;
-
-    const scaledEquity = scaledBS.equity.map(item => ({
-      ...item,
-      value: Math.floor(item.value * combinedBSScale)
-    }));
-
-    const curLiabilities = scaledBS.liabilities.current.reduce((sum, item) => sum + item.value, 0);
-    const nonCurLiabilities = scaledBS.liabilities.nonCurrent.reduce((sum, item) => sum + item.value, 0);
-    const totLiabilities = curLiabilities + nonCurLiabilities;
-
-    const paidInCapital = scaledEquity.find(e => e.name === "Common Paid-in Capital")?.value || Math.floor(2500000 * combinedBSScale);
-    const retainedEarnings = totAssets - totLiabilities - paidInCapital;
-    
-    scaledBS.equity = scaledEquity.map(item => {
-      if (item.name === "Retained Earnings Balance") {
-        return { ...item, value: retainedEarnings };
-      }
-      if (item.name === "Common Paid-in Capital") {
-        return { ...item, value: paidInCapital };
-      }
-      return item;
-    });
-    filtered.balanceSheet = scaledBS;
-
-    // Scale Accounts Receivable (AR) Aging
-    const scaledAR = { ...filtered.arAging };
-    const arTotalVal = scaledBS.assets.current.find(item => item.name === "Accounts Receivable (Net)")?.value || Math.floor(scaledAR.totalOutstanding * combinedBSScale);
-    scaledAR.totalOutstanding = arTotalVal;
-    scaledAR.buckets = scaledAR.buckets.map(b => ({
-      ...b,
-      value: Math.floor(arTotalVal * (b.percent / 100))
-    }));
-    scaledAR.debtors = scaledAR.debtors.map(d => ({
-      ...d,
-      amount: Math.floor(d.amount * combinedBSScale)
-    }));
-    filtered.arAging = scaledAR;
-
-    return filtered;
-  };
-
-  const activeData = getFilteredDashboardData();
+  const activeData = dashboardData;
 
   const handleCardClick = (cardId: string) => {
     if (cardId === "cashBalance" || cardId === "cash") {
@@ -374,7 +163,7 @@ export default function App() {
               onChange={(e) => {
                 const val = e.target.value;
                 setSelectedSubsidiary(val);
-                syncData(val);
+                syncData({ subsidiary: val });
               }}
               className="bg-white border border-slate-200 text-slate-700 rounded-lg px-2.5 py-1.5 focus:outline-none focus:border-slate-400 focus:ring-1 focus:ring-slate-400 text-[11px] font-semibold font-sans"
             >
@@ -399,13 +188,27 @@ export default function App() {
             <SlidersHorizontal className="w-3.5 h-3.5 text-slate-400" />
             <select
               value={selectedDept}
-              onChange={(e) => setSelectedDept(e.target.value)}
+              onChange={(e) => {
+                const val = e.target.value;
+                setSelectedDept(val);
+                syncData({ department: val });
+              }}
               className="bg-white border border-slate-200 text-slate-700 rounded-lg px-2.5 py-1.5 focus:outline-none focus:border-slate-400 focus:ring-1 focus:ring-slate-400 text-[11px] font-semibold font-sans"
             >
-              <option value="all">Department: All Cost Centers</option>
-              <option value="eng">Cost Center: Engineering / R&D</option>
-              <option value="sales">Cost Center: S&M Sales Operations</option>
-              <option value="admin">Cost Center: Executive G&A</option>
+              {departments.length > 0 ? (
+                departments.map((dept) => (
+                  <option key={dept.id} value={dept.id}>
+                    {dept.id === "all" ? `Department: ${dept.name}` : `Cost Center: ${dept.name}`}
+                  </option>
+                ))
+              ) : (
+                <>
+                  <option value="all">Department: All Cost Centers</option>
+                  <option value="eng">Cost Center: Engineering / R&D</option>
+                  <option value="sales">Cost Center: S&M Sales Operations</option>
+                  <option value="admin">Cost Center: Executive G&A</option>
+                </>
+              )}
             </select>
           </div>
 
@@ -414,7 +217,11 @@ export default function App() {
             <Calendar className="w-3.5 h-3.5 text-slate-400" />
             <select
               value={dateRange}
-              onChange={(e) => setDateRange(e.target.value)}
+              onChange={(e) => {
+                const val = e.target.value;
+                setDateRange(val);
+                if (val !== "custom") syncData({ dateRange: val });
+              }}
               className="bg-white border border-slate-200 text-slate-700 rounded-lg px-2.5 py-1.5 focus:outline-none focus:border-slate-400 focus:ring-1 focus:ring-slate-400 text-[11px] font-semibold font-sans"
             >
               <option value="ytd">Period: Full Year (YTD)</option>
@@ -491,7 +298,11 @@ export default function App() {
             <input
               type="date"
               value={startDate}
-              onChange={(e) => setStartDate(e.target.value)}
+              onChange={(e) => {
+                const val = e.target.value;
+                setStartDate(val);
+                syncData({ dateRange: "custom", startDate: val });
+              }}
               className="bg-white border border-slate-200 rounded-md px-2 py-1 text-[11px] font-semibold text-slate-700 focus:outline-none focus:border-slate-400 focus:ring-1 focus:ring-slate-400"
             />
           </div>
@@ -500,7 +311,11 @@ export default function App() {
             <input
               type="date"
               value={endDate}
-              onChange={(e) => setEndDate(e.target.value)}
+              onChange={(e) => {
+                const val = e.target.value;
+                setEndDate(val);
+                syncData({ dateRange: "custom", endDate: val });
+              }}
               className="bg-white border border-slate-200 rounded-md px-2 py-1 text-[11px] font-semibold text-slate-700 focus:outline-none focus:border-slate-400 focus:ring-1 focus:ring-slate-400"
             />
           </div>
