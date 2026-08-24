@@ -21,8 +21,6 @@ export default function App() {
   // Filter States (Standard NetSuite Segments)
   const [selectedSubsidiary, setSelectedSubsidiary] = useState<string>("all");
   const [selectedDept, setSelectedDept] = useState<string>("all");
-  const [accountingStandard, setAccountingStandard] = useState<"gaap" | "ifrs">("gaap");
-
   // Date Range Filter States
   const [dateRange, setDateRange] = useState<string>("ytd");
   const [startDate, setStartDate] = useState<string>(`${new Date().getFullYear()}-01-01`);
@@ -231,21 +229,6 @@ export default function App() {
           </div>
 
           {/* Standards Switcher */}
-          <div className="bg-slate-100 border border-slate-200 p-0.5 rounded-lg flex text-[10px] font-sans font-medium">
-            <button
-              onClick={() => setAccountingStandard("gaap")}
-              className={`px-2 py-1 rounded transition-all ${accountingStandard === "gaap" ? "bg-white text-slate-900 shadow-xs font-bold" : "text-slate-500 hover:text-slate-800"}`}
-            >
-              US GAAP
-            </button>
-            <button
-              onClick={() => setAccountingStandard("ifrs")}
-              className={`px-2 py-1 rounded transition-all ${accountingStandard === "ifrs" ? "bg-white text-slate-900 shadow-xs font-bold" : "text-slate-500 hover:text-slate-800"}`}
-            >
-              IFRS
-            </button>
-          </div>
-
           {/* Compare Periods Toggle */}
           <button
             onClick={() => {
