@@ -21,7 +21,7 @@ export default function AIChatBox({ contextData, onDrillDown }: AIChatBoxProps) 
     {
       id: "welcome",
       role: "assistant",
-      content: "Welcome to the CFO AI Workspace! I am your real-time NetSuite ERP Financial Advisor. Ask me to analyze budgets, calculate liquidity runway, assess collections risks, or help you drill down into ledger details.",
+      content: "Welcome to the CFO AI Workspace! I'm your real-time financial advisor. Ask me to analyse budgets, calculate liquidity runway, assess collections risks, or drill down into any ledger detail.",
       timestamp: new Date(),
     }
   ]);
@@ -152,7 +152,7 @@ export default function AIChatBox({ contextData, onDrillDown }: AIChatBoxProps) 
                       Live
                     </span>
                   </h3>
-                  <p className="text-[10px] text-slate-400 font-medium">NetSuite SuiteQL & Analysis Engine</p>
+                  <p className="text-[10px] text-slate-400 font-medium">Financial Intelligence Engine</p>
                 </div>
               </div>
               <button

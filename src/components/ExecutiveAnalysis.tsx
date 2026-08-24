@@ -45,7 +45,7 @@ export default function ExecutiveAnalysis({ data }: Props) {
     printWindow.document.write(`
       <html>
         <head>
-          <title>Executive Financial Commentary - NetSuite</title>
+          <title>Executive Financial Commentary — ASC Financials</title>
           <style>
             body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; padding: 40px; color: #333; line-height: 1.6; }
             h3 { border-bottom: 2px solid #ccc; padding-bottom: 10px; margin-top: 30px; font-size: 1.5rem; }
@@ -76,7 +76,7 @@ export default function ExecutiveAnalysis({ data }: Props) {
             <h3 className="font-display font-bold text-lg text-slate-900">AI CFO Board Narrative & Analysis</h3>
           </div>
           <p className="text-xs text-slate-500 mt-1">
-            Instantly formulate board-level analytical briefs and insights on active NetSuite reports using server-side Claude intelligence.
+            Instantly formulate board-level analytical briefs and insights on the active financial reports using server-side AI.
           </p>
         </div>
 

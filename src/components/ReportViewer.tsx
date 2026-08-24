@@ -425,7 +425,7 @@ export default function ReportViewer({ incomeStatement, balanceSheet, arAging }:
               <table className="w-full text-left border-collapse font-sans text-xs">
                 <thead>
                   <tr className="border-b border-slate-200 text-slate-500 text-[10px] uppercase tracking-wider font-semibold">
-                    <th className="pb-3 px-2">NetSuite Customer Account</th>
+                    <th className="pb-3 px-2">Customer Account</th>
                     <th className="pb-3 text-right">Outstanding Balance</th>
                     <th className="pb-3 text-right">Invoice Aging Days</th>
                     <th className="pb-3 text-right">Invoiced Period Risk</th>
