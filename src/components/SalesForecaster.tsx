@@ -84,7 +84,7 @@ export default function SalesForecaster({ baselineSales }: Props) {
             <h3 className="font-display font-bold text-lg text-slate-900">YTD Sales & Performance Forecasting</h3>
           </div>
           <p className="text-xs text-slate-500 mt-1">
-            Compare realized transactional sales from NetSuite invoices against model targets and forward-looking pipelines.
+            Compare realised invoice actuals against model targets and forward-looking pipeline projections.
           </p>
         </div>
 
@@ -132,7 +132,7 @@ export default function SalesForecaster({ baselineSales }: Props) {
                 {metricView === "revenue" ? formatCurrency(totalActualRevenue) : formatCurrency(totalActualGP)}
               </p>
               <p className="text-[10px] text-emerald-700 font-semibold font-sans flex items-center gap-1">
-                <CheckCircle2 className="w-3 h-3 text-emerald-600" /> NetSuite Invoice Actuals
+                <CheckCircle2 className="w-3 h-3 text-emerald-600" /> Invoice Actuals
               </p>
             </div>
           </div>
@@ -151,7 +151,7 @@ export default function SalesForecaster({ baselineSales }: Props) {
 
           <div className="text-[10px] text-slate-500 flex items-start gap-1 p-2.5 bg-slate-50 border border-slate-200 rounded-lg">
             <HelpCircle className="w-3.5 h-3.5 text-slate-500 shrink-0 mt-0.5" />
-            <span>Actuals are populated directly from closed NetSuite Accounting Periods. Pipelines represent Open Sales Orders and Estimations.</span>
+            <span>Actuals reflect closed accounting periods. Pipelines represent open sales orders and forward estimations.</span>
           </div>
         </div>
 
@@ -287,7 +287,7 @@ export default function SalesForecaster({ baselineSales }: Props) {
           <div className="flex gap-4 justify-center text-[11px] text-slate-500 mt-2">
             <div className="flex items-center gap-1.5 font-medium">
               <span className="w-2.5 h-2.5 bg-emerald-600 rounded-sm"></span>
-              <span>NetSuite Closed Actuals</span>
+              <span>Closed Actuals</span>
             </div>
             <div className="flex items-center gap-1.5 font-medium">
               <span className="w-2.5 h-2.5 bg-blue-600 rounded-sm"></span>

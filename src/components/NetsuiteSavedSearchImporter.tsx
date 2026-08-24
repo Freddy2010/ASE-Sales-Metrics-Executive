@@ -14,11 +14,10 @@ export default function NetsuiteSavedSearchImporter({ onImportSuccess, onClose }
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState(false);
 
-  // Pre-configured Saved Search templates (high-fidelity mock NetSuite exports)
   const templates = [
     {
-      name: "Standard Invoice & Transaction Saved Search (CSV)",
-      description: "NetSuite Transaction Saved Search containing Invoice lines, Sales Orders, and payments.",
+      name: "Invoice & Transaction Export (CSV)",
+      description: "Transaction export containing Invoice lines, Sales Orders, and payments.",
       data: `"Internal ID","Document Number","Type","Date","Entity (Name)","Amount","Gross Amount","Status"
 "10492","INV2026-981","Invoice","2026-06-15","Apex Global Systems","120000.00","120000.00","Paid"
 "10493","INV2026-982","Invoice","2026-06-18","Initech Software Ltd","85400.00","85400.00","Open"
@@ -30,7 +29,7 @@ export default function NetsuiteSavedSearchImporter({ onImportSuccess, onClose }
     },
     {
       name: "Accounts Receivable Detail Aging (CSV)",
-      description: "NetSuite Accounts Receivable aging saved search with days overdue, debtor company, and risk levels.",
+      description: "Accounts Receivable aging report with days overdue, debtor company, and risk classification.",
       data: `"Customer Name","Total Outstanding","Current","1 - 30 Days Overdue","31 - 60 Days Overdue","61 - 90 Days Overdue","90+ Days Overdue"
 "Tyrell Biotech Inc.","350000.00","200000.00","150000.00","0.00","0.00","0.00"
 "Soylent Financials","185000.00","0.00","85000.00","100000.00","0.00","0.00"
@@ -40,7 +39,7 @@ export default function NetsuiteSavedSearchImporter({ onImportSuccess, onClose }
     },
     {
       name: "Cost Center & Departmental Expense Ledger (JSON)",
-      description: "NetSuite general ledger expense distribution by cost center (Engineering, Sales, Admin).",
+      description: "General ledger expense distribution by cost center — Engineering, Sales, and Admin.",
       data: `{
   "reportingPeriod": "Q2 2026 Expenses",
   "departments": [
@@ -60,7 +59,7 @@ export default function NetsuiteSavedSearchImporter({ onImportSuccess, onClose }
 
   const handleParse = async () => {
     if (!rawData.trim()) {
-      setError("Please paste raw NetSuite CSV lines, general ledger text, or select one of the high-fidelity sample search templates below.");
+      setError("Please paste your financial data export or select one of the sample templates below.");
       return;
     }
 
@@ -90,7 +89,7 @@ export default function NetsuiteSavedSearchImporter({ onImportSuccess, onClose }
       }, 1500);
 
     } catch (err: any) {
-      setError(err.message || "Failed to parse data. Make sure a valid Claude API Key is configured in your Settings Secrets.");
+      setError(err.message || "Failed to parse data. Ensure a valid API key is configured in your environment settings.");
     } finally {
       setLoading(false);
     }
@@ -112,10 +111,10 @@ export default function NetsuiteSavedSearchImporter({ onImportSuccess, onClose }
             </div>
             <div>
               <h3 className="font-display font-bold text-base leading-none tracking-tight">
-                NetSuite Saved Search Importer
+                Financial Data Import
               </h3>
               <p className="text-[10px] text-slate-400 font-semibold mt-1">
-                Convert raw CSV reports or transaction tables into high-fidelity dashboards with CFO AI
+                Paste any transaction export or ledger — the CFO AI engine builds a full dashboard instantly
               </p>
             </div>
           </div>
@@ -133,8 +132,8 @@ export default function NetsuiteSavedSearchImporter({ onImportSuccess, onClose }
           <div className="bg-blue-50 border border-blue-100/70 rounded-xl p-4 flex gap-3 text-xs leading-relaxed text-blue-800">
             <Sparkles className="w-4 h-4 text-blue-600 mt-0.5 shrink-0" />
             <div>
-              <p className="font-bold mb-1">Direct ERP Pipeline Conversion</p>
-              Paste any transactional dataset, accounting ledger, or client-aging tables below. The integrated **CFO Claude Engine** will automatically normalize schemas, calculate ratios, map statement trees (GAAP/IFRS), and construct a balanced interactive workspace in real-time.
+              <p className="font-bold mb-1">AI-Powered Data Conversion</p>
+              Paste any transaction export, accounting ledger, or AR aging table below. The CFO AI engine automatically normalises schemas, calculates ratios, maps GAAP/IFRS statement structures, and builds a balanced interactive dashboard in real time.
             </div>
           </div>
 
@@ -143,7 +142,7 @@ export default function NetsuiteSavedSearchImporter({ onImportSuccess, onClose }
             <div className="flex justify-between items-center text-xs">
               <label className="font-bold text-slate-700 flex items-center gap-1.5">
                 <FileText className="w-4 h-4 text-slate-500" />
-                Raw Saved Search Data (CSV, TSV, or JSON)
+                Raw Financial Data (CSV, TSV, or JSON)
               </label>
               <button 
                 onClick={() => setRawData("")}
@@ -155,7 +154,7 @@ export default function NetsuiteSavedSearchImporter({ onImportSuccess, onClose }
             <textarea
               value={rawData}
               onChange={(e) => setRawData(e.target.value)}
-              placeholder={`Paste NetSuite search output here (e.g. CSV lines with headers: "Internal ID", "Document Number", "Amount", etc.)...`}
+              placeholder={`Paste your export here — e.g. CSV rows with headers like "Document Number", "Date", "Amount", "Status"...`}
               rows={8}
               className="w-full bg-slate-50 border border-slate-200 text-slate-800 rounded-xl p-3.5 font-mono text-[11px] leading-normal focus:outline-none focus:bg-white focus:border-slate-400 focus:ring-1 focus:ring-slate-400 resize-none placeholder:text-slate-400"
             />
@@ -165,7 +164,7 @@ export default function NetsuiteSavedSearchImporter({ onImportSuccess, onClose }
           <div className="space-y-2">
             <h4 className="text-xs font-bold text-slate-700 flex items-center gap-1.5">
               <Upload className="w-4 h-4 text-slate-500" />
-              Quick-Test Templates (High-Fidelity Sample Saved Searches)
+              Sample Data Templates
             </h4>
             <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
               {templates.map((tpl, i) => (

@@ -141,14 +141,11 @@ export default function App() {
             <Building2 className="w-5 h-5" />
           </div>
           <div>
-            <h1 className="font-display font-bold text-lg leading-tight tracking-tight text-slate-900 flex items-center gap-2">
-              NetSuite ERP Connector
-              <span className="text-[10px] bg-blue-50 text-blue-700 border border-blue-100 px-2 py-0.5 rounded font-mono font-bold uppercase">
-                v2.4
-              </span>
+            <h1 className="font-display font-bold text-lg leading-tight tracking-tight text-slate-900">
+              ASC Financials
             </h1>
             <p className="text-[11px] text-slate-500 font-semibold">
-              Enterprise SuiteTalk Financial Management Console
+              Executive Financial Intelligence Platform
             </p>
           </div>
         </div>
@@ -269,19 +266,18 @@ export default function App() {
 
           <div className="h-5 w-px bg-slate-200 hidden md:block"></div>
 
-          {/* Saved Search Importer Trigger */}
+          {/* Data Import Trigger */}
           <button
             onClick={() => setIsImporterOpen(true)}
             className="flex items-center gap-1.5 text-[11px] font-bold text-amber-800 bg-amber-50 hover:bg-amber-100 px-3 py-1.5 rounded-lg border border-amber-200 shadow-xs transition-all cursor-pointer group"
           >
-            <Database className="w-3.5 h-3.5 text-amber-600 group-hover:scale-105 transition-transform animate-pulse" />
-            <span>Load Saved Search</span>
+            <Database className="w-3.5 h-3.5 text-amber-600 group-hover:scale-105 transition-transform" />
+            <span>Import Data</span>
           </button>
 
-          {/* Last Synchronized Status */}
+          {/* Session Security Indicator */}
           <div className="flex items-center gap-1.5 text-[11px] text-slate-600 bg-slate-100 px-2.5 py-1.5 rounded-lg border border-slate-200">
             <ShieldCheck className="w-3.5 h-3.5 text-emerald-600" />
-            <span>Secured Session</span>
           </div>
         </div>
       </header>
@@ -330,7 +326,7 @@ export default function App() {
             <div className="flex items-center gap-2">
               <span className="p-1 rounded bg-rose-100 border border-rose-200">⚠️</span>
               <p>
-                <strong>System API Sync Error:</strong> {error} (Falling back to simulated high-fidelity metrics)
+                <strong>Sync Error:</strong> {error} — falling back to demo data.
               </p>
             </div>
             <button
@@ -346,10 +342,10 @@ export default function App() {
           <div className="p-4 bg-amber-50 border border-amber-200 text-amber-800 text-xs rounded-xl flex items-start gap-3 shadow-xs animate-fadeIn mb-4">
             <span className="p-1 rounded bg-amber-100 border border-amber-200 shrink-0">⚠️</span>
             <div className="space-y-1">
-              <p className="font-bold text-slate-900">NetSuite Live Query Fallback Active</p>
+              <p className="font-bold text-slate-900">Live Data Unavailable</p>
               <p className="text-slate-700 leading-relaxed font-mono text-[11px] bg-white/60 p-2 rounded border border-amber-200/40 mt-1">{dashboardData.errorNotice}</p>
               <p className="text-[10px] text-slate-500 pt-1.5">
-                The application connected successfully but failed to execute financial queries. Verify that the Role assigned to your NetSuite Access Token has full permissions for the <code className="font-mono bg-slate-100 px-1 py-0.5 rounded">transaction</code>, <code className="font-mono bg-slate-100 px-1 py-0.5 rounded">account</code>, and <code className="font-mono bg-slate-100 px-1 py-0.5 rounded">companyinformation</code> tables under NetSuite Setup &gt; Users/Roles.
+                The ERP connected but could not retrieve financial data. Verify your access credentials and role permissions, then refresh.
               </p>
             </div>
           </div>
@@ -360,8 +356,8 @@ export default function App() {
           <div className="flex flex-col items-center justify-center py-24 space-y-4">
             <RefreshCw className="w-10 h-10 text-slate-700 animate-spin" />
             <div className="space-y-1 text-center">
-              <p className="text-sm font-bold text-slate-900 font-display">Syncing NetSuite ERP Ledgers...</p>
-              <p className="text-xs text-slate-500">Contacting secure credentials vault server proxy</p>
+              <p className="text-sm font-bold text-slate-900 font-display">Loading Financial Data...</p>
+              <p className="text-xs text-slate-500">Connecting to data sources</p>
             </div>
           </div>
         ) : (
@@ -473,14 +469,14 @@ export default function App() {
 
       {/* 3. FOOTER */}
       <footer className="mt-auto border-t border-slate-200 bg-white px-6 py-4 flex flex-wrap justify-between items-center text-xs text-slate-500 font-sans gap-2">
-        <p>© 2026 NetSuite Financial Executive Dashboard | Oracle NetSuite SuiteTalk API</p>
+        <p>© 2026 ASC Financials</p>
         <div className="flex gap-4">
           <span className="flex items-center gap-1 font-semibold">
             <span className="w-1.5 h-1.5 rounded-full bg-emerald-600 inline-block animate-pulse"></span>
-            ERP Service Status: Operational
+            Service Status: Operational
           </span>
           <span className="font-semibold text-slate-400">|</span>
-          <span className="font-semibold">Compliant: PCAOB / GAAP standards</span>
+          <span className="font-semibold">PCAOB / GAAP Compliant</span>
         </div>
       </footer>
 
